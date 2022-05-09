@@ -12,7 +12,7 @@ android {
         targetSdk 30
         versionCode 1
         versionName "1.0"
-
+        multiDexEnabled true
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -51,4 +51,10 @@ dependencies {
     implementation 'org.tensorflow:tensorflow-lite:2.8.0'
     implementation 'org.tensorflow:tensorflow-lite-select-tf-ops:2.4.0'
     implementation 'com.google.guava:guava:28.2-android'
+    implementation 'androidx.multidex:multidex:2.0.1'
+    implementation ('com.github.wendykierp:JTransforms:3.1') {
+        ['org.apache.commons','commons-logging'].each {
+            exclude group: "$it"
+        }
+    }
 }

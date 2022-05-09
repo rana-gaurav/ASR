@@ -38,6 +38,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.jtransforms.fft.FloatFFT_1D;
 
 public class MainActivity extends AppCompatActivity implements AdapterView.OnItemSelectedListener {
 
@@ -55,8 +56,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private final static String TAG = "MainActivity";
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
-    private final static String[] WAV_FILENAMES = {"audio_clip_1.wav", "audio_clip_2.wav", "audio_clip_3.wav", "audio_clip_4.wav"};
-    private final static String TFLITE_FILE = "model_1.tflite";
+    private final static String[] WAV_FILENAMES = {"audio_clip_1.wav"};
+    private final static String TFLITE_FILE = "model_2.tflite";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -89,6 +90,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
         transcribeButton = findViewById(R.id.recognize);
         resultTextview = findViewById(R.id.result);
+
         transcribeButton.setOnClickListener(new View.OnClickListener() {
             @RequiresApi(api = Build.VERSION_CODES.M)
             @Override
@@ -104,15 +106,37 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         float part2[] = Arrays.copyOfRange(actualBuffer, 383, 511);
                         float[] newBuffer = new float[part1.length + part2.length];
                         System.arraycopy(part1, 0, newBuffer, 0, part1.length);
-                        System.arraycopy(part2, 0, newBuffer, 384, part2.length);
+                        System.arraycopy(part2, 0, newBuffer, part1.length, part2.length);
                         Log.d(TAG, Arrays.toString(newBuffer));
 
                         float audioFeatureValues[] = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
-                        float chunkData[][] = ArrayChunk(audioFeatureValues, 257);
+                        float chunkData[][] = ArrayChunk(audioFeatureValues, 512);
+
+                        // Fourier Transform
+                        FloatFFT_1D floatFFT_1D = new FloatFFT_1D(chunkData[0].length);
+                        floatFFT_1D.realForward(chunkData[0]);
+                        //floatFFT_1D.realInverse(chunkData[0], true);
+
+                        //Calculate absolute
+                        ArrayList<Float> real = new ArrayList<>();
+                        ArrayList<Float> img = new ArrayList<>();
+
+                        for(int i = 0; i < chunkData[0].length; i++){
+                            if(i % 2 == 0){
+                                //Even
+                                real.add(chunkData[0][i]);
+                            }else{
+                                //Odd
+                                img.add(chunkData[0][i]);
+                            }
+                        }
+
+
+
 
                         IntBuffer outputBuffer = IntBuffer.allocate(2000);
                         Map<Integer, Object> outputMap = new HashMap<>();
-                        float[][][] out1 = new float[1][1][257];
+                        float[][][] out1 = new float[1][1][512];
                         float[][][][] out2 = new float[1][2][128][2];
                         outputMap.put(0, out1);
                         outputMap.put(1, out2);
@@ -121,7 +145,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         Interpreter.Options tfLiteOptions = new Interpreter.Options();
                         tfLite = new Interpreter(tfLiteModel, tfLiteOptions);
                         // Input 1
-                        float[][][] f1 = new float[1][1][257];
+                            float[][][] f1 = new float[1][1][512];
                         for (int i = 0; i < chunkData[0].length; i++){
                                 f1[0][0][i] = (chunkData[0][i]);
                         }
@@ -383,7 +407,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                                         {0.0f, 0.0f},
                                         {0.0f, 0.0f},
                                         {0.0f, 0.0f}}}};
-                        Object[] inputArray = {f1, f1};
+                        Object[] inputArray = {f1, f2};
 //                        tfLite.resizeInput(0, new int[] {1,1,257});
 //                        tfLite.resizeInput(1, new int[] {1,2,128,2});
                         tfLite.runForMultipleInputsOutputs(inputArray, outputMap);
@@ -477,6 +501,19 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         }
 
         return bytes;
+    }
+
+    public static double[] convertFloatsToDoubles(float[] input) {
+        if (input == null)
+        {
+            return null; // Or throw an exception - your choice
+        }
+        double[] output = new double[input.length];
+        for (int i = 0; i < input.length; i++)
+        {
+            output[i] = input[i];
+        }
+        return output;
     }
 
 }
