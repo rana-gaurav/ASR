@@ -51,7 +51,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
     private final static String[] WAV_FILENAMES = {"audio_clip_4.wav"};
-    private final static String TFLITE_FILE = "model_2.tflite";
+    private final static String TFLITE_FILE = "model_1.tflite";
+
+    private int num_blocks;
+    private int block_shift = 128;
+    private int block_length = 512;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -90,20 +94,30 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             @Override
             public void onClick(View view) {
                 try {
+                    // filling empty buffer of 512 with increment data like 0 to 511
                     float a = 1.0f;
                     float[] actualBuffer = new float[512];
                     //Arrays.fill(actualBuffer, a+1f);
                     for (int i = 0; i < actualBuffer.length; i++) {
                         actualBuffer[i] = a++;
                     }
+
+                    // split into two parts of actually buffer
                     float part1[] = Arrays.copyOfRange(actualBuffer, 127, 511);
                     float part2[] = Arrays.copyOfRange(actualBuffer, 383, 511);
+
+                    // create a new buffer and block shifting with length of 128 to 512 to starting of array and at last 128 add the audio data
                     float[] newBuffer = new float[part1.length + part2.length];
                     System.arraycopy(part1, 0, newBuffer, 0, part1.length);
                     System.arraycopy(part2, 0, newBuffer, part1.length, part2.length);
                     Log.d(TAG, Arrays.toString(newBuffer));
 
+                    // reading the wave file using Jlibrosa in float array
                     float audioFeatureValues[] = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+
+                    num_blocks=(audioFeatureValues.length-(block_length-block_shift))/block_shift;
+
+                    // splitting the audio data into 512 size of each
                     float chunkData[][] = ArrayChunk(audioFeatureValues, 512);
 
                     // Fourier Transform
@@ -111,7 +125,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     floatFFT_1D.realForward(chunkData[0]);
                     //floatFFT_1D.realInverse(chunkData[0], true);
 
-                    //Calculate absolute
+                    //separation of real and imaginary values of FFT complex output
                     ArrayList<Float> real = new ArrayList<>();
                     ArrayList<Float> img = new ArrayList<>();
 
@@ -125,15 +139,18 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         }
                     }
 
+                    // Abs Values
                     float[] absValues = getAbs(real, img);
                     Log.d("abs", Arrays.toString(absValues));
 
-                    float[] getPhaseValues = getPhaseAngle(real, img);
+                    // Phase values
+                    float[] phaseValues = getPhaseAngle(real, img);
+                    Log.d("phaseValues", Arrays.toString(phaseValues));
 
 
                     IntBuffer outputBuffer = IntBuffer.allocate(2000);
                     Map<Integer, Object> outputMap = new HashMap<>();
-                    float[][][] out1 = new float[1][1][512];
+                    float[][][] out1 = new float[1][1][257];
                     float[][][][] out2 = new float[1][2][128][2];
                     outputMap.put(0, out1);
                     outputMap.put(1, out2);
@@ -142,7 +159,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     Interpreter.Options tfLiteOptions = new Interpreter.Options();
                     tfLite = new Interpreter(tfLiteModel, tfLiteOptions);
                     // Input 1
-                    float[][][] f1 = new float[1][1][512];
+                    float[][][] f1 = new float[1][1][257];
                     for (int i = 0; i < chunkData[0].length; i++) {
                         f1[0][0][i] = (chunkData[0][i]);
                     }
@@ -414,6 +431,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     outputBuffer.rewind();
                     outputBuffer.get(outputArray);
 
+                    estimatedComplex(img,outputArray,phaseValues);
+
                     //tfLite.run(byteBuffer, outputBuffer);
 
                     //                    StringBuilder finalResult = new StringBuilder();
@@ -442,8 +461,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     public void onNothingSelected(AdapterView<?> parent) {
     }
 
-    private static MappedByteBuffer loadModelFile(AssetManager assets, String modelFilename)
-            throws IOException {
+    private static MappedByteBuffer loadModelFile(AssetManager assets, String modelFilename) throws IOException {
         AssetFileDescriptor fileDescriptor = assets.openFd(modelFilename);
         FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
         FileChannel fileChannel = inputStream.getChannel();
@@ -485,8 +503,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             System.arraycopy(array, start, temp, 0, length);
             output[i] = temp;
         }
-
-        //
         return output;
     }
 
@@ -514,7 +530,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     public float[] getAbs(float[] re, float[] img) {
 
         float[] abs = new float[re.length];
-
         for (int i = 0; i < re.length; i++) {
             abs[i] = (float) Math.sqrt((re[i] * re[i]) + (img[i] + img[i]));
         }
@@ -524,20 +539,31 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     public float[] getPhaseAngle(ArrayList<Float> real, ArrayList<Float> img) {
 
         float[] phaseAngle = new float[real.size()];
-
         for (int i = 0; i < real.size(); i++) {
             phaseAngle[i] = (float) Math.atan(real.get(i) / img.get(i));
         }
         return phaseAngle;
     }
 
-
     private float[] getAbs(ArrayList<Float> real, ArrayList<Float> img) {
+
         float[] abs = new float[real.size()];
-        for (int i = 0; i < real.size(); i++) {
+        for (int i = 0; i <= real.size(); i++) {
             abs[i] = (float) Math.sqrt((real.get(i) * real.get(i)) + (img.get(i) * img.get(i)));
         }
         return abs;
     }
+
+    private void estimatedComplex(ArrayList<Float> img, int[] outputOfModel, float[] phaseAngle){
+        float[][][] estimatedValues=new float[1][1][img.size()];
+        for (int i=0;i<img.size();i++) {
+            estimatedValues[0][0][i] = (float) (img.get(i) *outputOfModel[i] * Math.exp(1*phaseAngle[i]));
+        }
+        Log.d("estimated complex",Arrays.toString(estimatedValues));
+
+
+
+    }
+
 
 }
