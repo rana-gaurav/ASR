@@ -36,37 +36,47 @@ import java.util.Map;
 
 public class MainActivity extends AppCompatActivity implements AdapterView.OnItemSelectedListener {
 
-    private MappedByteBuffer tfLiteModel;
-    private Interpreter tfLite;
+    private final static String TAG = "MainActivity";
+
     private Spinner audioClipSpinner;
     private Button transcribeButton;
     private Button playAudioButton;
     private TextView resultTextview;
-    private String wavFilename;
+
     private MediaPlayer mediaPlayer = new MediaPlayer();
-    private final static String TAG = "MainActivity";
+
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
+
     private final static String[] WAV_FILENAMES = {"audio_clip_4.wav"};
-    private final static String TFLITE_FILE = "model_1.tflite";
+    private final static String TFLITE_FILE_1 = "model_1.tflite";
+    private final static String TFLITE_FILE_2 = "model_2.tflite";
+    private String wavFilename;
 
     float[][] chunkData;
+    float[][] inBuffer;
     float[][][] inputShape1;
     float[][][][] inputShape2;
-    Map<Integer, Object> outputMap;
+    float[] outputOfModel1, outputOfModel2;
+
+    Map<Integer, Object> outputMap1, outputMap2;
+
+    int numBlocks;
+    int blockShift = 128;
+    int blockLength = 512;
+
+    private MappedByteBuffer tfLiteModel1, tfLiteModel2;
+    private Interpreter tfLite1, tfLite2;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
         JLibrosa jLibrosa = new JLibrosa();
-        audioClipSpinner = findViewById(R.id.audio_clip_spinner);
-        ArrayAdapter<String> adapter = new ArrayAdapter<String>(MainActivity.this,
-                android.R.layout.simple_spinner_item, WAV_FILENAMES);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        audioClipSpinner.setAdapter(adapter);
-        audioClipSpinner.setOnItemSelectedListener(this);
-        playAudioButton = findViewById(R.id.play);
+
+        initViews();
+
         playAudioButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -81,43 +91,95 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             }
         });
 
-        transcribeButton = findViewById(R.id.recognize);
-        resultTextview = findViewById(R.id.result);
         transcribeButton.setOnClickListener(new View.OnClickListener() {
             @RequiresApi(api = Build.VERSION_CODES.M)
             @Override
             public void onClick(View view) {
                 try {
-                        initOutput();
-                        float a = 1.0f;
-                        float[] actualBuffer = new float[512];
-                        //Arrays.fill(actualBuffer, a+1f);
-                        for (int i = 0; i < actualBuffer.length; i++) {
-                            actualBuffer[i] = a++;
-                        }
-                        float[] part1 = Arrays.copyOfRange(actualBuffer, 127, 511);
-                        float[] part2 = Arrays.copyOfRange(actualBuffer, 383, 511);
-                        float[] newBuffer = new float[part1.length + part2.length];
-                        System.arraycopy(part1, 0, newBuffer, 0, part1.length);
+                    // full audio buffer
+                    float[] audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+
+                    // audio buffer of size 128
+                    chunkData = ArrayChunk(audioFeatureValues, 128);
+
+                    // cal of number of blocks
+                    numBlocks = (audioFeatureValues.length - (blockLength - blockShift)) / blockShift;
+
+                    // init of output1 and output2 regrading size of model output
+                    initOutput1();
+                    initOutput2();
+
+                    //float a = 1.0f;
+                    float[] actualBuffer = new float[512];
+                    Arrays.fill(actualBuffer, 0.0f);
+
+                       /* for (int i = 0; i < actualBuffer.length; i++) {
+                        actualBuffer[i] = a++;
+                       }*/
+
+                    float part1[] = new float[512];
+
+                    for (int i = 0; i < numBlocks; i++) {
+
+                        /*float[] part1 = Arrays.copyOfRange(actualBuffer, 127, 511);
+                        float[] part2 = Arrays.copyOfRange(chunkData[i], 0, 127);
+                        float[] newBuffer = new float[part1.length + part2.length];*/
+                        /*System.arraycopy(part1, 0, newBuffer, 0, part1.length);
                         System.arraycopy(part2, 0, newBuffer, part1.length, part2.length);
-                        Log.d(TAG, Arrays.toString(newBuffer));
-                        float[] audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
-                        chunkData = ArrayChunk(audioFeatureValues, 512);
+                        Log.d(TAG, Arrays.toString(newBuffer));*/
+
+                        System.arraycopy(part1, 128, part1, 0, 384);
+                        System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
+
                         // Forward Fourier Transform
-                        realForwardFT();
-                        // Inverse Forier Transform
-                        realInverseFT();
+                        realForwardFT(part1); // TODO : new buffer we need pass
+
                         //Calculate absolute
                         float[] absValues = getAbs(getPart("real"), getPart("img"));
                         float[] getPhaseValues = getPhaseAngle(getPart("real"), getPart("img"));
+
                         chunkData = ArrayChunk(absValues, 256);
-                        initTflite();
-                        feedTFLite(inputShapeA(chunkData), inputShapeB(null));
+
+
+                        // model process
+                        initTflite1(TFLITE_FILE_1);
+                        feedTFLite1(inputShapeA(chunkData), inputShapeB(null));
+
+                        //estimate values in 1d array
+                        float[] forInverseFFT = estimatedComplex(absValues, outputOfModel1, getPhaseValues);
+
+                        // Inverse Fourier Transform
+                        float[] inverseFFT = realInverseFT(forInverseFFT);
+
+                        //convert 1d array to 2d array of output of inverse fft
+                        float[][] array2d = ArrayChunk(inverseFFT, 512);
+
+                        // convert the 2d array to 3d array
+                        float[][][] array3d = inputShapeC(array2d);
+
+                        initTflite2(TFLITE_FILE_2);
+                        feedTFLite2(array3d, inputShapeB(null));
+
+                    }
+
                 } catch (Exception e) {
                     Log.e(TAG + " Exception", e.getMessage());
                 }
             }
         });
+    }
+
+    private void initViews() {
+        ArrayAdapter<String> adapter = new ArrayAdapter<String>(MainActivity.this,
+                android.R.layout.simple_spinner_item, WAV_FILENAMES);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+
+        audioClipSpinner = findViewById(R.id.audio_clip_spinner);
+        audioClipSpinner.setAdapter(adapter);
+        audioClipSpinner.setOnItemSelectedListener(this);
+        playAudioButton = findViewById(R.id.play);
+        transcribeButton = findViewById(R.id.recognize);
+        resultTextview = findViewById(R.id.result);
     }
 
     @Override
@@ -172,19 +234,31 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         return output;
     }
 
-    private float[][][] inputShapeA(float[][] input){
+    private float[][][] inputShapeA(float[][] input) {
         inputShape1 = new float[1][1][257];
         for (int i = 0; i < input[0].length; i++) {
             inputShape1[0][0][i] = (input[0][i]);
         }
-        if(input[0].length == 256){
+        if (input[0].length == 256) {
             inputShape1[0][0][256] = input[0][255];
         }
         return inputShape1;
     }
 
-    private float[][][][] inputShapeB(float[][] input){
-        if(input == null){
+    // shape for model 2
+    private float[][][] inputShapeC(float[][] input) {
+        inputShape1 = new float[1][1][512];
+        for (int i = 0; i < input[0].length; i++) {
+            inputShape1[0][0][i] = (input[0][i]);
+        }
+        /*if (input[0].length == 512) {
+            inputShape1[0][0][256] = input[0][255];
+        }*/
+        return inputShape1;
+    }
+
+    private float[][][][] inputShapeB(float[][] input) {
+        if (input == null) {
             inputShape2 = new float[][][][]{{{{0.0f, 0.0f},
                     {0.0f, 0.0f},
                     {0.0f, 0.0f},
@@ -443,16 +517,25 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                             {0.0f, 0.0f}}}};
             return inputShape2;
         }
-            return null;
+        return null;
     }
 
-    public void initOutput(){
+    public void initOutput1() {
         IntBuffer outputBuffer = IntBuffer.allocate(2000);
-        outputMap = new HashMap<>();
+        outputMap1 = new HashMap<>();
         float[][][] out1 = new float[1][1][257];
         float[][][][] out2 = new float[1][2][128][2];
-        outputMap.put(0, out1);
-        outputMap.put(1, out2);
+        outputMap1.put(0, out1);
+        outputMap1.put(1, out2);
+    }
+
+    public void initOutput2() {
+        IntBuffer outputBuffer = IntBuffer.allocate(2000);
+        outputMap2 = new HashMap<>();
+        float[][][] out1 = new float[1][1][512];
+        float[][][][] out2 = new float[1][2][128][2];
+        outputMap2.put(0, out1);
+        outputMap2.put(1, out2);
     }
 
     public float[] getPhaseAngle(ArrayList<Float> real, ArrayList<Float> img) {
@@ -471,20 +554,33 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         return abs;
     }
 
-    private void initTflite() throws IOException {
-        tfLiteModel = loadModelFile(getAssets(), TFLITE_FILE);
+    private void initTflite1(String model) throws IOException {
+        tfLiteModel1 = loadModelFile(getAssets(), model);
         Interpreter.Options tfLiteOptions = new Interpreter.Options();
-        tfLite = new Interpreter(tfLiteModel, tfLiteOptions);
+        tfLite1 = new Interpreter(tfLiteModel1, tfLiteOptions);
     }
 
-    private void feedTFLite(float[][][] f1, float[][][][] f2){
+    private void feedTFLite1(float[][][] f1, float[][][][] f2) {
         Object[] inputArray = {f1, f2};
-        tfLite.runForMultipleInputsOutputs(inputArray, outputMap);
-        processOutput(outputMap);
+        tfLite1.runForMultipleInputsOutputs(inputArray, outputMap1);
+        processOutput1(outputMap1);
         Log.d("XXX", "Success");
     }
 
-    private ArrayList<Float> getPart(String part){
+    private void initTflite2(String model) throws IOException {
+        tfLiteModel2 = loadModelFile(getAssets(), model);
+        Interpreter.Options tfLiteOptions = new Interpreter.Options();
+        tfLite2 = new Interpreter(tfLiteModel2, tfLiteOptions);
+    }
+
+    private void feedTFLite2(float[][][] f1, float[][][][] f2) {
+        Object[] inputArray = {f1, f2};
+        tfLite2.runForMultipleInputsOutputs(inputArray, outputMap2);
+        processOutput2(outputMap2);
+        Log.d("XXX", "Success");
+    }
+
+    private ArrayList<Float> getPart(String part) {
         ArrayList<Float> real = new ArrayList<>();
         ArrayList<Float> img = new ArrayList<>();
         for (int i = 0; i < chunkData[0].length; i++) {
@@ -496,27 +592,59 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 img.add(chunkData[0][i]);
             }
         }
-        if(part.equals("real")){
+        if (part.equals("real")) {
             return real;
-        }else{
+        } else {
             return img;
         }
     }
 
-    private float[] realForwardFT(){
-        FloatFFT_1D floatFFT_1D = new FloatFFT_1D(chunkData[0].length);
-        floatFFT_1D.realForward(chunkData[0]);
-        return chunkData[0];
+    private float[] realForwardFT(float[] floats) {
+        FloatFFT_1D floatFFT_1D = new FloatFFT_1D(floats.length);
+        floatFFT_1D.realForward(floats);
+        return floats;
     }
 
-    private float[] realInverseFT(){
-        FloatFFT_1D floatFFT_1D = new FloatFFT_1D(chunkData[0].length);
-        floatFFT_1D.realInverse(chunkData[0], true);
-        return chunkData[0];
+    private float[] realInverseFT(float[] data) {
+        FloatFFT_1D floatFFT_1D = new FloatFFT_1D(data.length);
+        floatFFT_1D.realInverse(data, true);
+        return data;
     }
 
-//    private void processOutput(Map<Integer, Object> outputMap){
-//        f1 = outputMap.get(0);
-//    }
+    private float[] estimatedComplex(float[] abs, float[] outputOfModel1, float[] phaseAngle) {
+
+        float[] real = new float[abs.length];
+        float[] img = new float[abs.length];
+        float[] estimatedValues = new float[real.length + img.length];
+        int j = 0;
+
+        // cal the estimated values fro eluer methods
+        for (int i = 0; i < abs.length; i++) {
+            real[i] = (float) (abs[i] * outputOfModel1[i] * Math.cos((phaseAngle[i])));
+            img[i] = (float) (abs[i] * outputOfModel1[i] * Math.sin((phaseAngle[i])));
+        }
+
+        // combine the real and img in a sequence of array
+        for (int i = 0; i < real.length + img.length; i += 2) {
+            estimatedValues[i] = real[j];
+            estimatedValues[i + 1] = img[j];
+            j += 1;
+        }
+
+        Log.d("estimated complex", "");
+        return estimatedValues;
+    }
+
+    private void processOutput1(Map<Integer, Object> outputMap) {
+        float[][][] hashMapOutput = (float[][][]) outputMap.get(0);
+        outputOfModel1 = hashMapOutput[0][0];
+        Log.d("cc", "" + outputOfModel1);
+    }
+
+    private void processOutput2(Map<Integer, Object> outputMap) {
+        float[][][] hashMapOutput = (float[][][]) outputMap.get(0);
+        outputOfModel2 = hashMapOutput[0][0];
+        Log.d("cc", "" + outputOfModel2);
+    }
 
 }
