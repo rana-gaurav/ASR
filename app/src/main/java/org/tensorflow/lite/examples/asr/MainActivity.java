@@ -47,6 +47,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
     private String wavFilename;
+    float[] audioFeatureValues;
     float[][] chunkData;
     float[][] inBuffer;
     float[][][] inputShape1;
@@ -56,6 +57,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     float[][][][] hashMapOutputD;
     // final outputs from models
     float[] outputOfModel1, outputOfModel2;
+    float[] outputBuffer = new float[512];
+    float[] completeBuffer;
     Map<Integer, Object> outputMap1, outputMap2;
     int numBlocks;
     int blockShift = 128;
@@ -89,8 +92,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             public void onClick(View view) {
                 try {
                     // full audio buffer
-                    float[] audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+                    audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
                     // audio buffer of size 128
+                    completeBuffer = new float[audioFeatureValues.length];
                     chunkData = ArrayChunk(audioFeatureValues, 128);
                     // cal of number of blocks
                     numBlocks = (audioFeatureValues.length - (blockLength - blockShift)) / blockShift;
@@ -896,7 +900,21 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         float[][][] hashMapOutput = (float[][][]) outputMap.get(0);
         hashMapOutputD = (float[][][][]) outputMap.get(1);
         outputOfModel2 = hashMapOutput[0][0];
+        getData(outputOfModel2);
         Log.d("data1", "" + hashMapOutputD.length);
+    }
+
+    int count = 0;
+    private void getData(float[] lastOutput){
+        Log.d("XXX", ""+count++);
+        float[] emptyBuffer = new float[128];
+        System.arraycopy(outputBuffer, 128, outputBuffer, 0, 384);
+        System.arraycopy(emptyBuffer, 0, outputBuffer, 384, emptyBuffer.length);
+        for(int i = 0; i < outputBuffer.length; i++){
+            outputBuffer[i] = outputBuffer[i] + lastOutput[i];
+        }
+        System.arraycopy(outputBuffer, 0, completeBuffer, (count*128), 128);
+        Log.d("XXX", String.valueOf(completeBuffer));
     }
 
 }
