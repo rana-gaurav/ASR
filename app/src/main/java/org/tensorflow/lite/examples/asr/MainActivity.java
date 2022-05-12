@@ -30,7 +30,6 @@ import java.nio.IntBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -117,7 +116,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
                     float part1[] = new float[512];
 
-                    for (int i = 0; i < numBlocks; i++) {
+                    for (int i = 0; i <= numBlocks; i++) {
+
+                        Log.d("data", "" + i);
 
                         System.arraycopy(part1, 128, part1, 0, 384);
                         System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
@@ -130,12 +131,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
                         float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
 
-                        //chunkData = ArrayChunk(absValues, 256); // TODO: Discuss with gaurav
+                        inBuffer[i] = absValues;
 
 
                         // model process
                         initTflite1(TFLITE_FILE_1);
-                        feedTFLite1(inputShapeA(chunkData), inputShapeB(null));
+                        feedTFLite1(inputShapeA(inBuffer), inputShapeB(null));
 
                         //estimate values in 1d array
                         float[] forInverseFFT = estimatedComplex(absValues, outputOfModel1, getPhaseValues);
