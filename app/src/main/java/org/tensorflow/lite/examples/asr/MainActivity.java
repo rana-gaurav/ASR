@@ -57,6 +57,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     float[][] inBuffer;
     float[][][] inputShape1;
     float[][][][] inputShape2;
+
+    // final outputs from models
     float[] outputOfModel1, outputOfModel2;
 
     Map<Integer, Object> outputMap1, outputMap2;
@@ -110,35 +112,24 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     initOutput2();
 
                     //float a = 1.0f;
-                    float[] actualBuffer = new float[512];
-                    Arrays.fill(actualBuffer, 0.0f);
-
-                       /* for (int i = 0; i < actualBuffer.length; i++) {
-                        actualBuffer[i] = a++;
-                       }*/
+                    //float[] actualBuffer = new float[512];
+                    //Arrays.fill(actualBuffer, 0.0f);
 
                     float part1[] = new float[512];
 
                     for (int i = 0; i < numBlocks; i++) {
 
-                        /*float[] part1 = Arrays.copyOfRange(actualBuffer, 127, 511);
-                        float[] part2 = Arrays.copyOfRange(chunkData[i], 0, 127);
-                        float[] newBuffer = new float[part1.length + part2.length];*/
-                        /*System.arraycopy(part1, 0, newBuffer, 0, part1.length);
-                        System.arraycopy(part2, 0, newBuffer, part1.length, part2.length);
-                        Log.d(TAG, Arrays.toString(newBuffer));*/
-
                         System.arraycopy(part1, 128, part1, 0, 384);
                         System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
 
                         // Forward Fourier Transform
-                        realForwardFT(part1); // TODO : new buffer we need pass
+                        float[] forwardFT = realForwardFT(part1);
 
                         //Calculate absolute
                         float[] absValues = getAbs(getPart("real"), getPart("img"));
                         float[] getPhaseValues = getPhaseAngle(getPart("real"), getPart("img"));
 
-                        chunkData = ArrayChunk(absValues, 256);
+                        chunkData = ArrayChunk(absValues, 256); // TODO: Discuss with gaurav 11
 
 
                         // model process
@@ -170,7 +161,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     }
 
     private void initViews() {
-        ArrayAdapter<String> adapter = new ArrayAdapter<String>(MainActivity.this,
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(MainActivity.this,
                 android.R.layout.simple_spinner_item, WAV_FILENAMES);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
 
