@@ -125,11 +125,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         // Forward Fourier Transform
                         float[] forwardFT = realForwardFT(part1);
 
-                        //Calculate absolute
-                        float[] absValues = getAbs(getPart("real"), getPart("img"));
-                        float[] getPhaseValues = getPhaseAngle(getPart("real"), getPart("img"));
 
-                        chunkData = ArrayChunk(absValues, 256); // TODO: Discuss with gaurav 11
+                        //Calculate absolute
+                        float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
+                        float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
+
+                        //chunkData = ArrayChunk(absValues, 256); // TODO: Discuss with gaurav
 
 
                         // model process
@@ -571,16 +572,16 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         Log.d("XXX", "Success");
     }
 
-    private ArrayList<Float> getPart(String part) {
+    private ArrayList<Float> getPart(String part, float[] data) {
         ArrayList<Float> real = new ArrayList<>();
         ArrayList<Float> img = new ArrayList<>();
-        for (int i = 0; i < chunkData[0].length; i++) {
+        for (int i = 0; i < data.length; i++) {
             if (i % 2 == 0) {
                 //Even
-                real.add(chunkData[0][i]);
+                real.add(data[i]);
             } else {
                 //Odd
-                img.add(chunkData[0][i]);
+                img.add(data[i]);
             }
         }
         if (part.equals("real")) {
