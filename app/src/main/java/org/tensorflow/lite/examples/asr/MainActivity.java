@@ -5,6 +5,7 @@ import android.content.res.AssetManager;
 import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.util.Log;
 import android.view.View;
 import android.widget.AdapterView;
@@ -23,10 +24,12 @@ import org.tensorflow.lite.Interpreter;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.IntBuffer;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
@@ -36,42 +39,58 @@ import java.util.Map;
 
 public class MainActivity extends AppCompatActivity implements AdapterView.OnItemSelectedListener {
 
-    private MappedByteBuffer tfLiteModel;
-    private Interpreter tfLite;
+    private final static String TAG = "MainActivity";
 
     private Spinner audioClipSpinner;
     private Button transcribeButton;
     private Button playAudioButton;
     private TextView resultTextview;
 
-    private String wavFilename;
-    private MediaPlayer mediaPlayer = new MediaPlayer();
-
-    private final static String TAG = "MainActivity";
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
-    private final static String[] WAV_FILENAMES = {"audio_clip_4.wav"};
-    private final static String TFLITE_FILE = "model_1.tflite";
 
-    private int num_blocks;
-    private int block_shift = 128;
-    private int block_length = 512;
+    private final static String[] WAV_FILENAMES = {"noisy.wav"};
+
+    private final static String TFLITE_FILE_1 = "model_1.tflite";
+    private final static String TFLITE_FILE_2 = "model_2.tflite";
+
+    float[] audioFeatureValues;
+    float[][] chunkData;
+    float[][] inBuffer;
+    float[][][] inputShape1;
+    float[][][][] inputShape2;
+
+    // Output of tflite 1 and should be initialized to f2;
+    float[][][][] hashMapOutputB;
+    float[][][][] hashMapOutputD;
+
+    // final outputs from models
+    float[] outputOfModel1, outputOfModel2;
+    float[] outputBuffer = new float[512];
+    float[] completeBuffer;
+
+    Map<Integer, Object> outputMap1, outputMap2;
+
+    int numBlocks;
+    int blockShift = 128;
+    int blockLength = 512;
+    private String wavFilename;
+
+    private MappedByteBuffer tfLiteModel1, tfLiteModel2;
+    private Interpreter tfLite1, tfLite2;
+    private MediaPlayer mediaPlayer;
+    JLibrosa jLibrosa;
+
+    File saveDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/Active Noise");
+    File cleanDir = new File(saveDir.getAbsolutePath() + "/clean");
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
-        JLibrosa jLibrosa = new JLibrosa();
-
-        audioClipSpinner = findViewById(R.id.audio_clip_spinner);
-        ArrayAdapter<String> adapter = new ArrayAdapter<String>(MainActivity.this,
-                android.R.layout.simple_spinner_item, WAV_FILENAMES);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        audioClipSpinner.setAdapter(adapter);
-        audioClipSpinner.setOnItemSelectedListener(this);
-
-        playAudioButton = findViewById(R.id.play);
+        jLibrosa = new JLibrosa();
+        initViews();
         playAudioButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -86,371 +105,100 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             }
         });
 
-        transcribeButton = findViewById(R.id.recognize);
-        resultTextview = findViewById(R.id.result);
-
         transcribeButton.setOnClickListener(new View.OnClickListener() {
             @RequiresApi(api = Build.VERSION_CODES.M)
             @Override
             public void onClick(View view) {
                 try {
-                    // filling empty buffer of 512 with increment data like 0 to 511
-                    float a = 1.0f;
-                    float[] actualBuffer = new float[512];
-                    //Arrays.fill(actualBuffer, a+1f);
-                    for (int i = 0; i < actualBuffer.length; i++) {
-                        actualBuffer[i] = a++;
-                    }
+                    // full audio buffer
+                    audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+                    completeBuffer = new float[audioFeatureValues.length];
 
-                    // split into two parts of actually buffer
-                    float part1[] = Arrays.copyOfRange(actualBuffer, 127, 511);
-                    float part2[] = Arrays.copyOfRange(actualBuffer, 383, 511);
+                    // audio buffer of size 128
+                    chunkData = ArrayChunk(audioFeatureValues, 128);
 
-                    // create a new buffer and block shifting with length of 128 to 512 to starting of array and at last 128 add the audio data
-                    float[] newBuffer = new float[part1.length + part2.length];
-                    System.arraycopy(part1, 0, newBuffer, 0, part1.length);
-                    System.arraycopy(part2, 0, newBuffer, part1.length, part2.length);
-                    Log.d(TAG, Arrays.toString(newBuffer));
+                    // cal of number of blocks
+                    numBlocks = (audioFeatureValues.length - (blockLength - blockShift)) / blockShift;
 
-                    // reading the wave file using Jlibrosa in float array
-                    float audioFeatureValues[] = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+                    // init of output1 and output2 regrading size of model output
+                    initOutput1();
+                    initOutput2();
 
-                    num_blocks=(audioFeatureValues.length-(block_length-block_shift))/block_shift;
+                    float part1[] = new float[512];
+                    float[] temp=new float[512];
 
-                    // splitting the audio data into 512 size of each
-                    float chunkData[][] = ArrayChunk(audioFeatureValues, 512);
+                    for (int i = 0; i <= numBlocks; i++) {
 
-                    // Fourier Transform
-                    FloatFFT_1D floatFFT_1D = new FloatFFT_1D(chunkData[0].length);
-                    floatFFT_1D.realForward(chunkData[0]);
-                    //floatFFT_1D.realInverse(chunkData[0], true);
 
-                    //separation of real and imaginary values of FFT complex output
-                    ArrayList<Float> real = new ArrayList<>();
-                    ArrayList<Float> img = new ArrayList<>();
+                        Log.d("data", "" + i);
 
-                    for (int i = 0; i < chunkData[0].length; i++) {
-                        if (i % 2 == 0) {
-                            //Even
-                            real.add(chunkData[0][i]);
+                        System.arraycopy(part1, 128, part1, 0, 384);
+                        System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
+
+
+                        System.arraycopy(part1,0,temp,0,512);
+                       // temp=part1;
+
+                        // Forward Fourier Transform
+                        float[] forwardFT = realForwardFT(temp);
+
+
+                        //Calculate absolute
+                        float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
+                        float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
+                        inBuffer = ArrayChunk(absValues, 256);
+                        // model process
+                        initTflite1(TFLITE_FILE_1);
+                        if (i == 0) {
+                            feedTFLite1(inputShapeA(inBuffer), inputShapeB(null));
                         } else {
-                            //Odd
-                            img.add(chunkData[0][i]);
+                            feedTFLite1(inputShapeA(inBuffer), inputShapeB("hashMapOutputB"));
+                        }
+                        //estimate values in 1d array
+                        float[] forInverseFFT = estimatedComplex(absValues, outputOfModel1, getPhaseValues);
+
+                        // Inverse Fourier Transform
+                        float[] inverseFFT = realInverseFT(forInverseFFT);
+
+                        //convert 1d array to 2d array of output of inverse fft
+                        float[][] array2d = ArrayChunk(inverseFFT, 512);
+
+                        // convert the 2d array to 3d array
+                        float[][][] array3d = inputShapeC(array2d);
+
+                        initTflite2(TFLITE_FILE_2);
+
+                        if (i == 0) {
+                            feedTFLite2(array3d, inputShapeD(null), i);
+                        } else {
+                            feedTFLite2(array3d, inputShapeD("hashMapOutputD"), i);
                         }
                     }
 
-                    // Abs Values
-                    float[] absValues = getAbs(real, img);
-                    Log.d("abs", Arrays.toString(absValues));
+                    writeFloatToByte(completeBuffer);
 
-                    // Phase values
-                    float[] phaseValues = getPhaseAngle(real, img);
-                    Log.d("phaseValues", Arrays.toString(phaseValues));
-
-
-                    IntBuffer outputBuffer = IntBuffer.allocate(2000);
-                    Map<Integer, Object> outputMap = new HashMap<>();
-                    float[][][] out1 = new float[1][1][257];
-                    float[][][][] out2 = new float[1][2][128][2];
-                    outputMap.put(0, out1);
-                    outputMap.put(1, out2);
-
-                    tfLiteModel = loadModelFile(getAssets(), TFLITE_FILE);
-                    Interpreter.Options tfLiteOptions = new Interpreter.Options();
-                    tfLite = new Interpreter(tfLiteModel, tfLiteOptions);
-                    // Input 1
-                    float[][][] f1 = new float[1][1][257];
-                    for (int i = 0; i < chunkData[0].length; i++) {
-                        f1[0][0][i] = (chunkData[0][i]);
-                    }
-
-                    // Input 2 initial array
-                    float[][][][] f2 = {{{{0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f},
-                            {0.0f, 0.0f}},
-                            {{0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f},
-                                    {0.0f, 0.0f}}}};
-                    Object[] inputArray = {f1, f2};
-//                        tfLite.resizeInput(0, new int[] {1,1,257});
-//                        tfLite.resizeInput(1, new int[] {1,2,128,2});
-                    tfLite.runForMultipleInputsOutputs(inputArray, outputMap);
-                    Log.d(TAG, "Output Success");
-                    int outputSize = tfLite.getOutputTensor(0).shape()[0];
-                    int[] outputArray = new int[outputSize];
-                    outputBuffer.rewind();
-                    outputBuffer.get(outputArray);
-
-                    estimatedComplex(img,outputArray,phaseValues);
-
-                    //tfLite.run(byteBuffer, outputBuffer);
-
-                    //                    StringBuilder finalResult = new StringBuilder();
-                    //                    for (int i=0; i < outputSize; i++) {
-                    //                        char c = (char) outputArray[i];
-                    //                        if (outputArray[i] != 0) {
-                    //                            finalResult.append((char) outputArray[i]);
-                    //                        }
-                    //                    }
-                    //                    resultTextview.setText(finalResult.toString());
+                    Log.d("dd", "sucess" + outputBuffer);
                 } catch (Exception e) {
                     Log.e(TAG + " Exception", e.getMessage());
                 }
             }
         });
-
     }
 
+    private void initViews() {
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(MainActivity.this,
+                android.R.layout.simple_spinner_item, WAV_FILENAMES);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+
+        audioClipSpinner = findViewById(R.id.audio_clip_spinner);
+        audioClipSpinner.setAdapter(adapter);
+        audioClipSpinner.setOnItemSelectedListener(this);
+        playAudioButton = findViewById(R.id.play);
+        transcribeButton = findViewById(R.id.recognize);
+        resultTextview = findViewById(R.id.result);
+
+        mediaPlayer = new MediaPlayer();
+    }
 
     @Override
     public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
@@ -461,7 +209,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     public void onNothingSelected(AdapterView<?> parent) {
     }
 
-    private static MappedByteBuffer loadModelFile(AssetManager assets, String modelFilename) throws IOException {
+    private static MappedByteBuffer loadModelFile(AssetManager assets, String modelFilename)
+            throws IOException {
         AssetFileDescriptor fileDescriptor = assets.openFd(modelFilename);
         FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
         FileChannel fileChannel = inputStream.getChannel();
@@ -479,7 +228,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 byte[] buffer = new byte[inputStreamSize];
                 inputStream.read(buffer);
                 inputStream.close();
-
                 FileOutputStream fileOutputStream = new FileOutputStream(destinationFile);
                 fileOutputStream.write(buffer);
                 fileOutputStream.close();
@@ -487,14 +235,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 Log.e(TAG, e.getMessage());
             }
         }
-
         return getCacheDir() + wavFilename;
     }
 
     public static float[][] ArrayChunk(float[] array, int chunkSize) {
         int numOfChunks = (int) Math.ceil((double) array.length / chunkSize);
         float[][] output = new float[numOfChunks][];
-
         for (int i = 0; i < numOfChunks; i++) {
             int start = i * chunkSize;
             int length = Math.min(array.length - start, chunkSize);
@@ -506,38 +252,576 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         return output;
     }
 
-    byte[] toPrimitives(Byte[] oBytes) {
-        byte[] bytes = new byte[oBytes.length];
-
-        for (int i = 0; i < oBytes.length; i++) {
-            bytes[i] = oBytes[i];
+    private float[][][] inputShapeA(float[][] input) {
+        inputShape1 = new float[1][1][257];
+        for (int i = 0; i < input[0].length; i++) {
+            inputShape1[0][0][i] = (input[0][i]);
         }
-
-        return bytes;
+        if (input[0].length == 256) {
+            inputShape1[0][0][256] = input[0][255];
+        }
+        return inputShape1;
     }
 
-    public static double[] convertFloatsToDoubles(float[] input) {
+    // shape for model 2
+    private float[][][] inputShapeC(float[][] input) {
+        inputShape1 = new float[1][1][512];
+        for (int i = 0; i < input[0].length; i++) {
+            inputShape1[0][0][i] = (input[0][i]);
+        }
+        /*if (input[0].length == 512) {
+            inputShape1[0][0][256] = input[0][255];
+        }*/
+        return inputShape1;
+    }
+
+    private float[][][][] inputShapeB(String input) {
         if (input == null) {
-            return null; // Or throw an exception - your choice
+            inputShape2 = new float[][][][]{{{{0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f}},
+                    {{0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f}}}};
+        } else {
+            inputShape2 = hashMapOutputB;
         }
-        double[] output = new double[input.length];
-        for (int i = 0; i < input.length; i++) {
-            output[i] = input[i];
-        }
-        return output;
+        return inputShape2;
     }
 
-    public float[] getAbs(float[] re, float[] img) {
-
-        float[] abs = new float[re.length];
-        for (int i = 0; i < re.length; i++) {
-            abs[i] = (float) Math.sqrt((re[i] * re[i]) + (img[i] + img[i]));
+    private float[][][][] inputShapeD(String input) {
+        if (input == null) {
+            inputShape2 = new float[][][][]{{{{0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f},
+                    {0.0f, 0.0f}},
+                    {{0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f},
+                            {0.0f, 0.0f}}}};
+        } else {
+            inputShape2 = hashMapOutputD;
         }
-        return abs;
+        return inputShape2;
+    }
+
+    public void initOutput1() {
+        // IntBuffer outputBuffer = IntBuffer.allocate(2000);
+        outputMap1 = new HashMap<>();
+        float[][][] out1 = new float[1][1][257];
+        float[][][][] out2 = new float[1][2][128][2];
+        outputMap1.put(0, out1);
+        outputMap1.put(1, out2);
+    }
+
+    public void initOutput2() {
+        // IntBuffer outputBuffer = IntBuffer.allocate(2000);
+        outputMap2 = new HashMap<>();
+        float[][][] out1 = new float[1][1][512];
+        float[][][][] out2 = new float[1][2][128][2];
+        outputMap2.put(0, out1);
+        outputMap2.put(1, out2);
     }
 
     public float[] getPhaseAngle(ArrayList<Float> real, ArrayList<Float> img) {
-
         float[] phaseAngle = new float[real.size()];
         for (int i = 0; i < real.size(); i++) {
             phaseAngle[i] = (float) Math.atan(real.get(i) / img.get(i));
@@ -546,23 +830,245 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     }
 
     private float[] getAbs(ArrayList<Float> real, ArrayList<Float> img) {
-
         float[] abs = new float[real.size()];
-        for (int i = 0; i <= real.size(); i++) {
-            abs[i] = (float) Math.sqrt((real.get(i) * real.get(i)) + (img.get(i) * img.get(i)));
+        for (int i = 0; i < real.size(); i++) {
+            abs[i] = (float) Math.sqrt(Math.pow(real.get(i), 2) + (Math.pow(img.get(i), 2)));
         }
         return abs;
     }
 
-    private void estimatedComplex(ArrayList<Float> img, int[] outputOfModel, float[] phaseAngle){
-        float[][][] estimatedValues=new float[1][1][img.size()];
-        for (int i=0;i<img.size();i++) {
-            estimatedValues[0][0][i] = (float) (img.get(i) *outputOfModel[i] * Math.exp(1*phaseAngle[i]));
+    private void initTflite1(String model) throws IOException {
+        tfLiteModel1 = loadModelFile(getAssets(), model);
+        Interpreter.Options tfLiteOptions = new Interpreter.Options();
+        tfLite1 = new Interpreter(tfLiteModel1, tfLiteOptions);
+    }
+
+    private void feedTFLite1(float[][][] f1, float[][][][] f2) {
+        Object[] inputArray = {f1, f2};
+        tfLite1.runForMultipleInputsOutputs(inputArray, outputMap1);
+        tfliteOutput1(outputMap1);
+        Log.d("XXX", "Success");
+    }
+
+    private void initTflite2(String model) throws IOException {
+        tfLiteModel2 = loadModelFile(getAssets(), model);
+        Interpreter.Options tfLiteOptions = new Interpreter.Options();
+        tfLite2 = new Interpreter(tfLiteModel2, tfLiteOptions);
+    }
+
+    private void feedTFLite2(float[][][] f1, float[][][][] f2, int index) {
+        Object[] inputArray = {f1, f2};
+        tfLite2.runForMultipleInputsOutputs(inputArray, outputMap2);
+        tfliteOutput2(outputMap2, index);
+        Log.d("XXX", "Success");
+    }
+
+    private ArrayList<Float> getPart(String part, float[] data) {
+        ArrayList<Float> real = new ArrayList<>();
+        ArrayList<Float> img = new ArrayList<>();
+        for (int i = 0; i < data.length; i++) {
+            if (i % 2 == 0) {
+                //Even
+                real.add(data[i]);
+            } else {
+                //Odd
+                img.add(data[i]);
+            }
         }
-        Log.d("estimated complex",Arrays.toString(estimatedValues));
+        if (part.equals("real")) {
+            return real;
+        } else {
+            return img;
+        }
+    }
+
+    private float[] realForwardFT(float[] floats) {
+        FloatFFT_1D floatFFT_1D = new FloatFFT_1D(floats.length);
+        floatFFT_1D.realForward(floats);
+        return floats;
+    }
+
+    private float[] realInverseFT(float[] data) {
+        FloatFFT_1D floatFFT_1D = new FloatFFT_1D(data.length);
+        floatFFT_1D.realInverse(data, true);
+        return data;
+    }
+
+    private float[] estimatedComplex(float[] abs, float[] outputOfModel1, float[] phaseAngle) {
+
+        float[] real = new float[abs.length];
+        float[] img = new float[abs.length];
+        float[] estimatedValues = new float[real.length + img.length];
+        int j = 0;
+
+        // cal the estimated values fro eluer methods
+        for (int i = 0; i < abs.length; i++) {
+            real[i] = (float) (abs[i] * outputOfModel1[i] * Math.cos((phaseAngle[i])));
+            img[i] = (float) (abs[i] * outputOfModel1[i] * Math.sin((phaseAngle[i])));
+        }
+
+        // combine the real and img in a sequence of array
+        for (int i = 0; i < real.length + img.length; i += 2) {
+            estimatedValues[i] = real[j];
+            estimatedValues[i + 1] = img[j];
+            j += 1;
+        }
+
+        Log.d("estimated complex", "");
+        return estimatedValues;
+    }
+
+    private void tfliteOutput1(Map<Integer, Object> outputMap) {
+        float[][][] hashMapOutput1 = (float[][][]) outputMap.get(0);
+        hashMapOutputB = (float[][][][]) outputMap.get(1);
+        outputOfModel1 = hashMapOutput1[0][0];
+        Log.d("cc", "" + outputOfModel1);
+    }
+
+    private void tfliteOutput2(Map<Integer, Object> outputMap, int index) {
+        float[][][] hashMapOutput = (float[][][]) outputMap.get(0);
+        hashMapOutputD = (float[][][][]) outputMap.get(1);
+        outputOfModel2 = hashMapOutput[0][0];
+        try {
+            getData(outputOfModel2, index);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        Log.d("data1", "" + hashMapOutputD.length);
+    }
+
+    int count = 0;
+
+    private void getData(float[] lastOutput, int index) throws IOException {
+        Log.d("XXX", "" + index);
+        float[] emptyBuffer = new float[128];
+        System.arraycopy(outputBuffer, 128, outputBuffer, 0, 384);
+        System.arraycopy(emptyBuffer, 0, outputBuffer, 384, emptyBuffer.length);
+        for (int i = 0; i < outputBuffer.length; i++) {
+            outputBuffer[i] = outputBuffer[i] + lastOutput[i];
+        }
+        System.arraycopy(outputBuffer, 0, completeBuffer, (index * 128), 128);
+        Log.d("XXX", String.valueOf(completeBuffer));
 
 
+    }
 
+    public void writeFloatToByte(float[] array) throws IOException{
+        byte [] audioBuffer = new byte[4*array.length];
+
+        for(int i=0;i<array.length;i++) {
+            byte[] byteArray = ByteBuffer.allocate(4).putFloat(array[i] * 32767).array();
+            for(int k=0;k<byteArray.length;k++) {
+                audioBuffer[i*4+k]=byteArray[k];
+            }
+        }
+        Log.d("XXX", String.valueOf(audioBuffer));
+
+        byte[] mainAudioData=convertWaveFile(audioBuffer);
+
+        //writeByte(mainAudioData);
+
+        Log.d("XXX", Arrays.toString(mainAudioData));
+
+    }
+
+    static void writeByte(byte[] bytes) {
+        // Try block to check for exceptions
+        try {
+            // Initialize a pointer in file
+            // using OutputStream
+            //OutputStream os = new FileOutputStream(file);
+            // Starting writing the bytes in it
+           // os.write(bytes);
+            // Close the file connections
+            //os.close();
+        }
+        // Catch block to handle the exceptions
+        catch (Exception e) {
+        }
+    }
+
+    public byte[] convertWaveFile(byte[] data) {
+        FileOutputStream out = null;
+        long totalAudioLen = 0;
+        long totalDataLen = totalAudioLen + 36;
+        long longSampleRate = 16000;
+        int channels = 1;
+        long byteRate = 16 * longSampleRate * channels / 8;
+        try {
+            totalAudioLen = 32000;
+            totalDataLen = totalAudioLen + 36;
+            byte[] header = writeWaveFileHeader(totalAudioLen, totalDataLen, longSampleRate, channels, byteRate);
+            byte[] result = new byte[header.length + data.length];
+            System.arraycopy(header, 0, result, 0, header.length);
+            System.arraycopy(data, 0, result, header.length, data.length);
+            return result;
+
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+
+    private byte[] writeWaveFileHeader(long totalAudioLen, long totalDataLen, long longSampleRate, int channels, long byteRate) throws IOException {
+        byte[] header = new byte[44];
+        header[0] = 'R'; // RIFF
+        header[1] = 'I';
+        header[2] = 'F';
+        header[3] = 'F';
+        header[4] = (byte) (totalDataLen & 0xff);//数据大小
+        header[5] = (byte) ((totalDataLen >> 8) & 0xff);
+        header[6] = (byte) ((totalDataLen >> 16) & 0xff);
+        header[7] = (byte) ((totalDataLen >> 24) & 0xff);
+        header[8] = 'W';//WAVE
+        header[9] = 'A';
+        header[10] = 'V';
+        header[11] = 'E';
+        //FMT Chunk
+        header[12] = 'f'; // 'fmt '
+        header[13] = 'm';
+        header[14] = 't';
+        header[15] = ' ';//过渡字节
+        //数据大小
+        header[16] = 16; // 4 bytes: size of 'fmt ' chunk
+        header[17] = 0;
+        header[18] = 0;
+        header[19] = 0;
+        //编码方式 10H为PCM编码格式
+        header[20] = 1; // format = 1
+        header[21] = 0;
+        //通道数
+        header[22] = (byte) channels;
+        header[23] = 0;
+        //采样率，每个通道的播放速度
+        header[24] = (byte) (longSampleRate & 0xff);
+        header[25] = (byte) ((longSampleRate >> 8) & 0xff);
+        header[26] = (byte) ((longSampleRate >> 16) & 0xff);
+        header[27] = (byte) ((longSampleRate >> 24) & 0xff);
+        //音频数据传送速率,采样率*通道数*采样深度/8
+        header[28] = (byte) (byteRate & 0xff);
+        header[29] = (byte) ((byteRate >> 8) & 0xff);
+        header[30] = (byte) ((byteRate >> 16) & 0xff);
+        header[31] = (byte) ((byteRate >> 24) & 0xff);
+        // 确定系统一次要处理多少个这样字节的数据，确定缓冲区，通道数*采样位数
+        header[32] = (byte) (1 * 16 / 8);
+        header[33] = 0;
+        //每个样本的数据位数
+        header[34] = 16;
+        header[35] = 0;
+        //Data chunk
+        header[36] = 'd';//data
+        header[37] = 'a';
+        header[38] = 't';
+        header[39] = 'a';
+        header[40] = (byte) (totalAudioLen & 0xff);
+        header[41] = (byte) ((totalAudioLen >> 8) & 0xff);
+        header[42] = (byte) ((totalAudioLen >> 16) & 0xff);
+        header[43] = (byte) ((totalAudioLen >> 24) & 0xff);
+        return header;
     }
 
 
