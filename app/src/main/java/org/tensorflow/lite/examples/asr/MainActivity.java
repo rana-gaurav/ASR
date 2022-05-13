@@ -26,7 +26,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.IntBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
@@ -36,35 +35,45 @@ import java.util.Map;
 public class MainActivity extends AppCompatActivity implements AdapterView.OnItemSelectedListener {
 
     private final static String TAG = "MainActivity";
+
     private Spinner audioClipSpinner;
     private Button transcribeButton;
     private Button playAudioButton;
     private TextView resultTextview;
-    private MediaPlayer mediaPlayer = new MediaPlayer();
+
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
+
     private final static String[] WAV_FILENAMES = {"audio_clip_4.wav"};
+
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
-    private String wavFilename;
+
     float[] audioFeatureValues;
     float[][] chunkData;
     float[][] inBuffer;
     float[][][] inputShape1;
     float[][][][] inputShape2;
+
     // Output of tflite 1 and should be initialized to f2;
     float[][][][] hashMapOutputB;
     float[][][][] hashMapOutputD;
+
     // final outputs from models
     float[] outputOfModel1, outputOfModel2;
     float[] outputBuffer = new float[512];
     float[] completeBuffer;
+
     Map<Integer, Object> outputMap1, outputMap2;
+
     int numBlocks;
     int blockShift = 128;
     int blockLength = 512;
+    private String wavFilename;
+
     private MappedByteBuffer tfLiteModel1, tfLiteModel2;
     private Interpreter tfLite1, tfLite2;
+    private MediaPlayer mediaPlayer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -93,9 +102,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 try {
                     // full audio buffer
                     audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
-                    // audio buffer of size 128
                     completeBuffer = new float[audioFeatureValues.length];
+
+                    // audio buffer of size 128
                     chunkData = ArrayChunk(audioFeatureValues, 128);
+
                     // cal of number of blocks
                     numBlocks = (audioFeatureValues.length - (blockLength - blockShift)) / blockShift;
 
@@ -103,21 +114,23 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     initOutput1();
                     initOutput2();
 
-                    //float a = 1.0f;
-                    //float[] actualBuffer = new float[512];
-                    //Arrays.fill(actualBuffer, 0.0f);
-
                     float part1[] = new float[512];
+                    float[] temp=new float[512];
 
                     for (int i = 0; i <= numBlocks; i++) {
+
 
                         Log.d("data", "" + i);
 
                         System.arraycopy(part1, 128, part1, 0, 384);
                         System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
 
+
+                        System.arraycopy(part1,0,temp,0,512);
+                       // temp=part1;
+
                         // Forward Fourier Transform
-                        float[] forwardFT = realForwardFT(part1);
+                        float[] forwardFT = realForwardFT(temp);
 
 
                         //Calculate absolute
@@ -126,9 +139,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         inBuffer = ArrayChunk(absValues, 256);
                         // model process
                         initTflite1(TFLITE_FILE_1);
-                        if(i == 0) {
+                        if (i == 0) {
                             feedTFLite1(inputShapeA(inBuffer), inputShapeB(null));
-                        }else{
+                        } else {
                             feedTFLite1(inputShapeA(inBuffer), inputShapeB("hashMapOutputB"));
                         }
                         //estimate values in 1d array
@@ -145,12 +158,14 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
                         initTflite2(TFLITE_FILE_2);
 
-                        if(i == 0){
+                        if (i == 0) {
                             feedTFLite2(array3d, inputShapeD(null));
-                        }else{
+                        } else {
                             feedTFLite2(array3d, inputShapeD("hashMapOutputD"));
                         }
                     }
+
+                    Log.d("dd", "sucess" + outputBuffer);
                 } catch (Exception e) {
                     Log.e(TAG + " Exception", e.getMessage());
                 }
@@ -169,6 +184,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         playAudioButton = findViewById(R.id.play);
         transcribeButton = findViewById(R.id.recognize);
         resultTextview = findViewById(R.id.result);
+
+        mediaPlayer = new MediaPlayer();
     }
 
     @Override
@@ -504,7 +521,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                             {0.0f, 0.0f},
                             {0.0f, 0.0f},
                             {0.0f, 0.0f}}}};
-        }else{
+        } else {
             inputShape2 = hashMapOutputB;
         }
         return inputShape2;
@@ -768,14 +785,14 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                             {0.0f, 0.0f},
                             {0.0f, 0.0f},
                             {0.0f, 0.0f}}}};
-        }else{
+        } else {
             inputShape2 = hashMapOutputD;
         }
         return inputShape2;
     }
 
     public void initOutput1() {
-        IntBuffer outputBuffer = IntBuffer.allocate(2000);
+        // IntBuffer outputBuffer = IntBuffer.allocate(2000);
         outputMap1 = new HashMap<>();
         float[][][] out1 = new float[1][1][257];
         float[][][][] out2 = new float[1][2][128][2];
@@ -784,7 +801,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     }
 
     public void initOutput2() {
-        IntBuffer outputBuffer = IntBuffer.allocate(2000);
+        // IntBuffer outputBuffer = IntBuffer.allocate(2000);
         outputMap2 = new HashMap<>();
         float[][][] out1 = new float[1][1][512];
         float[][][][] out2 = new float[1][2][128][2];
@@ -803,7 +820,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private float[] getAbs(ArrayList<Float> real, ArrayList<Float> img) {
         float[] abs = new float[real.size()];
         for (int i = 0; i < real.size(); i++) {
-            abs[i] = (float) Math.sqrt((real.get(i) * real.get(i)) + (img.get(i) * img.get(i)));
+            abs[i] = (float) Math.sqrt(Math.pow(real.get(i), 2) + (Math.pow(img.get(i), 2)));
         }
         return abs;
     }
@@ -905,15 +922,16 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     }
 
     int count = 0;
-    private void getData(float[] lastOutput){
-        Log.d("XXX", ""+count++);
+
+    private void getData(float[] lastOutput) {
+        Log.d("XXX", "" + count++);
         float[] emptyBuffer = new float[128];
         System.arraycopy(outputBuffer, 128, outputBuffer, 0, 384);
         System.arraycopy(emptyBuffer, 0, outputBuffer, 384, emptyBuffer.length);
-        for(int i = 0; i < outputBuffer.length; i++){
+        for (int i = 0; i < outputBuffer.length; i++) {
             outputBuffer[i] = outputBuffer[i] + lastOutput[i];
         }
-        System.arraycopy(outputBuffer, 0, completeBuffer, (count*128), 128);
+        System.arraycopy(outputBuffer, 0, completeBuffer, (count * 128), 128);
         Log.d("XXX", String.valueOf(completeBuffer));
     }
 
