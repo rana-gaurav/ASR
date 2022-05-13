@@ -74,12 +74,13 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private MappedByteBuffer tfLiteModel1, tfLiteModel2;
     private Interpreter tfLite1, tfLite2;
     private MediaPlayer mediaPlayer;
+    JLibrosa jLibrosa;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        JLibrosa jLibrosa = new JLibrosa();
+        jLibrosa = new JLibrosa();
         initViews();
         playAudioButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -159,9 +160,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         initTflite2(TFLITE_FILE_2);
 
                         if (i == 0) {
-                            feedTFLite2(array3d, inputShapeD(null));
+                            feedTFLite2(array3d, inputShapeD(null), i);
                         } else {
-                            feedTFLite2(array3d, inputShapeD("hashMapOutputD"));
+                            feedTFLite2(array3d, inputShapeD("hashMapOutputD"), i);
                         }
                     }
 
@@ -844,10 +845,10 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         tfLite2 = new Interpreter(tfLiteModel2, tfLiteOptions);
     }
 
-    private void feedTFLite2(float[][][] f1, float[][][][] f2) {
+    private void feedTFLite2(float[][][] f1, float[][][][] f2, int index) {
         Object[] inputArray = {f1, f2};
         tfLite2.runForMultipleInputsOutputs(inputArray, outputMap2);
-        tfliteOutput2(outputMap2);
+        tfliteOutput2(outputMap2, index);
         Log.d("XXX", "Success");
     }
 
@@ -913,26 +914,27 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         Log.d("cc", "" + outputOfModel1);
     }
 
-    private void tfliteOutput2(Map<Integer, Object> outputMap) {
+    private void tfliteOutput2(Map<Integer, Object> outputMap, int index) {
         float[][][] hashMapOutput = (float[][][]) outputMap.get(0);
         hashMapOutputD = (float[][][][]) outputMap.get(1);
         outputOfModel2 = hashMapOutput[0][0];
-        getData(outputOfModel2);
+        getData(outputOfModel2, index);
         Log.d("data1", "" + hashMapOutputD.length);
     }
 
     int count = 0;
 
-    private void getData(float[] lastOutput) {
-        Log.d("XXX", "" + count++);
+    private void getData(float[] lastOutput, int index) {
+        Log.d("XXX", "" + index);
         float[] emptyBuffer = new float[128];
         System.arraycopy(outputBuffer, 128, outputBuffer, 0, 384);
         System.arraycopy(emptyBuffer, 0, outputBuffer, 384, emptyBuffer.length);
         for (int i = 0; i < outputBuffer.length; i++) {
             outputBuffer[i] = outputBuffer[i] + lastOutput[i];
         }
-        System.arraycopy(outputBuffer, 0, completeBuffer, (count * 128), 128);
+        System.arraycopy(outputBuffer, 0, completeBuffer, (index * 128), 128);
         Log.d("XXX", String.valueOf(completeBuffer));
     }
+
 
 }
