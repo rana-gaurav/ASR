@@ -1,5 +1,11 @@
 package org.tensorflow.lite.examples.asr;
 
+import static android.Manifest.permission.MANAGE_EXTERNAL_STORAGE;
+import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
+
+import android.Manifest;
+import android.content.ContextWrapper;
+import android.content.pm.PackageManager;
 import android.content.res.AssetFileDescriptor;
 import android.content.res.AssetManager;
 import android.media.MediaPlayer;
@@ -13,23 +19,27 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.jlibrosa.audio.JLibrosa;
 
 import org.jtransforms.fft.FloatFFT_1D;
 import org.tensorflow.lite.Interpreter;
 
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
@@ -49,10 +59,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
 
-    private final static String[] WAV_FILENAMES = {"noisy.wav"};
+    private final static String[] WAV_FILENAMES = {"ajay.wav"};
 
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
+    protected static final int BYTES_PER_FLOAT = Float.SIZE / 8;
 
     float[] audioFeatureValues;
     float[][] chunkData;
@@ -74,6 +85,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     int numBlocks;
     int blockShift = 128;
     int blockLength = 512;
+    int count = 0;
     private String wavFilename;
 
     private MappedByteBuffer tfLiteModel1, tfLiteModel2;
@@ -81,8 +93,14 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private MediaPlayer mediaPlayer;
     JLibrosa jLibrosa;
 
-    File saveDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/Active Noise");
+    ContextWrapper cw = new ContextWrapper(this);
+
+    File saveDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/ActiveNoise");
+    File originalDir = new File(saveDir.getAbsolutePath() + "/original");
     File cleanDir = new File(saveDir.getAbsolutePath() + "/clean");
+    File cleanAudioFIle = new File(cleanDir.getAbsolutePath() + "/cleanAudio8.wav");
+
+
 
 
     @Override
@@ -109,10 +127,18 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             @RequiresApi(api = Build.VERSION_CODES.M)
             @Override
             public void onClick(View view) {
+                final long start = System.currentTimeMillis();
                 try {
+
+                    if (checkPermission()) {
+
+                    } else {
+                        requestPermission();
+                    }
+
                     // full audio buffer
                     audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
-                    completeBuffer = new float[audioFeatureValues.length];
+
 
                     // audio buffer of size 128
                     chunkData = ArrayChunk(audioFeatureValues, 128);
@@ -120,14 +146,16 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     // cal of number of blocks
                     numBlocks = (audioFeatureValues.length - (blockLength - blockShift)) / blockShift;
 
+                    completeBuffer = new float[audioFeatureValues.length];
+
                     // init of output1 and output2 regrading size of model output
                     initOutput1();
                     initOutput2();
 
                     float part1[] = new float[512];
-                    float[] temp=new float[512];
+                    float[] temp = new float[512];
 
-                    for (int i = 0; i <= numBlocks; i++) {
+                    for (int i = 0; i < numBlocks; i++) {
 
 
                         Log.d("data", "" + i);
@@ -136,8 +164,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
 
 
-                        System.arraycopy(part1,0,temp,0,512);
-                       // temp=part1;
+                        System.arraycopy(part1, 0, temp, 0, 512);
+                        // temp=part1;
 
                         // Forward Fourier Transform
                         float[] forwardFT = realForwardFT(temp);
@@ -146,7 +174,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         //Calculate absolute
                         float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
                         float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
-                        inBuffer = ArrayChunk(absValues, 256);
+                        inBuffer = ArrayChunk(absValues, 257);
                         // model process
                         initTflite1(TFLITE_FILE_1);
                         if (i == 0) {
@@ -177,12 +205,36 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
                     writeFloatToByte(completeBuffer);
 
-                    Log.d("dd", "sucess" + outputBuffer);
+                    final long end = System.currentTimeMillis();
+                    Log.d("time", "The program was running: " + ((double)(end-start)/1000.0d) + "sec");
+                    Log.d("dd", "success" + outputBuffer);
                 } catch (Exception e) {
                     Log.e(TAG + " Exception", e.getMessage());
                 }
             }
         });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode,String permissions[], int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        switch (requestCode) {
+            case 1:
+                if (grantResults.length > 0) {
+                    boolean StoragePermission = grantResults[0] ==
+                            PackageManager.PERMISSION_GRANTED;
+                    boolean RecordPermission = grantResults[1] ==
+                            PackageManager.PERMISSION_GRANTED;
+
+                    if (StoragePermission && RecordPermission) {
+                        Toast.makeText(MainActivity.this, "Permission Granted",
+                                Toast.LENGTH_SHORT).show();
+                    } else {
+                        //Toast.makeText(MainActivity.this, "Enable External file permissions", Toast.LENGTH_SHORT).show();
+                    }
+                }
+                break;
+        }
     }
 
     private void initViews() {
@@ -198,6 +250,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         resultTextview = findViewById(R.id.result);
 
         mediaPlayer = new MediaPlayer();
+
+
+        if (!saveDir.exists()) saveDir.mkdirs();
+        if (!originalDir.exists()) originalDir.mkdirs();
+        if (!cleanDir.exists()) cleanDir.mkdirs();
     }
 
     @Override
@@ -824,8 +881,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     public float[] getPhaseAngle(ArrayList<Float> real, ArrayList<Float> img) {
         float[] phaseAngle = new float[real.size()];
         for (int i = 0; i < real.size(); i++) {
-            phaseAngle[i] = (float) Math.atan(real.get(i) / img.get(i));
+            phaseAngle[i] = (float) Math.atan2(img.get(i), real.get(i));
         }
+        // phaseAngle[256]=phaseAngle[255];
         return phaseAngle;
     }
 
@@ -834,6 +892,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         for (int i = 0; i < real.size(); i++) {
             abs[i] = (float) Math.sqrt(Math.pow(real.get(i), 2) + (Math.pow(img.get(i), 2)));
         }
+
+        // abs[256] = abs[255];
         return abs;
     }
 
@@ -921,6 +981,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private void tfliteOutput1(Map<Integer, Object> outputMap) {
         float[][][] hashMapOutput1 = (float[][][]) outputMap.get(0);
         hashMapOutputB = (float[][][][]) outputMap.get(1);
+
+        // outputModel1 is 1d array extract from 3d array used for estimated complex.
         outputOfModel1 = hashMapOutput1[0][0];
         Log.d("cc", "" + outputOfModel1);
     }
@@ -937,8 +999,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         Log.d("data1", "" + hashMapOutputD.length);
     }
 
-    int count = 0;
-
     private void getData(float[] lastOutput, int index) throws IOException {
         Log.d("XXX", "" + index);
         float[] emptyBuffer = new float[128];
@@ -949,42 +1009,67 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         }
         System.arraycopy(outputBuffer, 0, completeBuffer, (index * 128), 128);
         Log.d("XXX", String.valueOf(completeBuffer));
-
-
     }
 
-    public void writeFloatToByte(float[] array) throws IOException{
-        byte [] audioBuffer = new byte[4*array.length];
+    public void writeFloatToByte(float[] array) throws IOException {
+        byte[] audioBuffer = new byte[array.length*4];
 
-        for(int i=0;i<array.length;i++) {
+        /*for (int i = 0; i < array.length; i++) {
             byte[] byteArray = ByteBuffer.allocate(4).putFloat(array[i] * 32767).array();
-            for(int k=0;k<byteArray.length;k++) {
-                audioBuffer[i*4+k]=byteArray[k];
+            for (int k = 0; k < byteArray.length; k++) {
+                audioBuffer[i * 4 + k] = byteArray[k];
             }
+        }*/
+
+        /*for (int x = 0; x < array.length; x++) {
+            ByteBuffer.wrap(audioBuffer, x*4, 4).putFloat(array[x]);
         }
-        Log.d("XXX", String.valueOf(audioBuffer));
+*/
 
-        byte[] mainAudioData=convertWaveFile(audioBuffer);
+        ByteBuffer buffer =
+                ByteBuffer.allocate(BYTES_PER_FLOAT * array.length).
+                        order(ByteOrder.BIG_ENDIAN);
+        for (float f : array) {
+            buffer.putFloat(f);
+        }
+        audioBuffer= buffer.array();
 
-        //writeByte(mainAudioData);
+
+        Log.d("XXX", Arrays.toString(audioBuffer));
+
+        byte[] mainAudioData = convertWaveFile(audioBuffer);
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            // Do the file write
+            writeByteToFile(mainAudioData);
+
+        } else {
+            // Request permission from the user
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 0);
+        }
+
+
 
         Log.d("XXX", Arrays.toString(mainAudioData));
 
     }
 
-    static void writeByte(byte[] bytes) {
+    void writeByteToFile(byte[] bytes) {
         // Try block to check for exceptions
         try {
             // Initialize a pointer in file
             // using OutputStream
-            //OutputStream os = new FileOutputStream(file);
+            DataOutputStream os = new DataOutputStream(new FileOutputStream(cleanAudioFIle));
             // Starting writing the bytes in it
-           // os.write(bytes);
+            os.write(bytes);
             // Close the file connections
-            //os.close();
+            os.close();
+            Toast.makeText(getApplicationContext(),"Completed",Toast.LENGTH_SHORT).show();
         }
         // Catch block to handle the exceptions
         catch (Exception e) {
+            Log.d("xxx", e.getMessage());
         }
     }
 
@@ -1071,5 +1156,18 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         return header;
     }
 
+    public boolean checkPermission() {
+        int result = ContextCompat.checkSelfPermission(getApplicationContext(),
+                WRITE_EXTERNAL_STORAGE);
+        int result1 = ContextCompat.checkSelfPermission(getApplicationContext(),
+                MANAGE_EXTERNAL_STORAGE);
+        return result == PackageManager.PERMISSION_GRANTED &&
+                result1 == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestPermission() {
+        ActivityCompat.requestPermissions(MainActivity.this, new
+                String[]{WRITE_EXTERNAL_STORAGE, MANAGE_EXTERNAL_STORAGE}, 1);
+    }
 
 }
