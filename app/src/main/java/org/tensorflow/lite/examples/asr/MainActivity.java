@@ -59,7 +59,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
 
-    private final static String[] WAV_FILENAMES = {"ajay.wav"};
+    private final static String[] WAV_FILENAMES = {"ajay.wav", "audio_cut.wav", "a1.wav"};
 
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
@@ -1028,9 +1028,10 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
         ByteBuffer buffer =
                 ByteBuffer.allocate(BYTES_PER_FLOAT * array.length).
-                        order(ByteOrder.BIG_ENDIAN);
+                        order(ByteOrder.LITTLE_ENDIAN);
         for (float f : array) {
-            buffer.putFloat(f);
+            //buffer.putFloat(f);
+            buffer.putShort((short) (f * 32768F));
         }
         audioBuffer= buffer.array();
 
@@ -1081,7 +1082,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         int channels = 1;
         long byteRate = 16 * longSampleRate * channels / 8;
         try {
-            totalAudioLen = 32000;
+            totalAudioLen = data.length;
             totalDataLen = totalAudioLen + 36;
             byte[] header = writeWaveFileHeader(totalAudioLen, totalDataLen, longSampleRate, channels, byteRate);
             byte[] result = new byte[header.length + data.length];
