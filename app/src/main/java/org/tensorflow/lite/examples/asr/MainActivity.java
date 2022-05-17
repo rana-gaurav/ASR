@@ -63,14 +63,18 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private ProgressBar progressBar;
     private TextView resultTextview;
 
+    private int numBlocks;
+    private int blockShift = 128;
+    private int blockLength = 512;
+    private int count = 0;
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
+    protected static final int BYTES_PER_FLOAT = Float.SIZE / 8;
 
     private final static String[] WAV_FILENAMES = {"ajay.wav", "audio_cut.wav", "a1.wav","a2.wav","a3.wav","a4.wav","a5.wav","a6.wav","a7.wav","a8.wav","a9.wav","a10.wav"};
-
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
-    protected static final int BYTES_PER_FLOAT = Float.SIZE / 8;
+    private String wavFilename;
 
     float[] audioFeatureValues;
     float[][] chunkData;
@@ -89,12 +93,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     Map<Integer, Object> outputMap1, outputMap2;
 
-    int numBlocks;
-    int blockShift = 128;
-    int blockLength = 512;
-    int count = 0;
-    private String wavFilename;
-
     private MappedByteBuffer tfLiteModel1, tfLiteModel2;
     private Interpreter tfLite1, tfLite2;
     private MediaPlayer mediaPlayer,mp;
@@ -107,11 +105,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     File cleanDir = new File(saveDir.getAbsolutePath() + "/clean");
     File cleanAudioFIle = new File(cleanDir.getAbsolutePath() + "/cleanAudio.wav");
 
-    double total = 0;
-    double avg = 0;
-
-
-
+    private double total = 0;
+    private double avg = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -162,7 +157,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     System.out.println("Exception of type : " + e.toString());
                     e.printStackTrace();
                 }
-
                 mp.start();
             }
         });
@@ -177,7 +171,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 }
             }
         });
-
 
     }
 
@@ -219,12 +212,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         playCleanButton=findViewById(R.id.btnPlayClean);
         progressBar=findViewById(R.id.progressBar);
 
-       //progressBar.setVisibility(View.GONE);
-
-
         mediaPlayer = new MediaPlayer();
         mp = new MediaPlayer();
-
 
         if (!saveDir.exists()) saveDir.mkdirs();
         if (!originalDir.exists()) originalDir.mkdirs();
@@ -857,7 +846,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         for (int i = 0; i < real.size(); i++) {
             phaseAngle[i] = (float) Math.atan2(img.get(i), real.get(i));
         }
-        // phaseAngle[256]=phaseAngle[255];
         return phaseAngle;
     }
 
@@ -866,8 +854,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         for (int i = 0; i < real.size(); i++) {
             abs[i] = (float) Math.sqrt(Math.pow(real.get(i), 2) + (Math.pow(img.get(i), 2)));
         }
-
-        // abs[256] = abs[255];
         return abs;
     }
 
@@ -999,8 +985,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         }
 */
 
-        ByteBuffer buffer =
-                ByteBuffer.allocate(BYTES_PER_FLOAT * array.length).
+        ByteBuffer buffer = ByteBuffer.allocate(BYTES_PER_FLOAT * array.length).
                         order(ByteOrder.LITTLE_ENDIAN);
         for (float f : array) {
             //buffer.putFloat(f);
@@ -1008,13 +993,15 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         }
         audioBuffer= buffer.array();
 
-
         Log.d("XXX", Arrays.toString(audioBuffer));
 
+
+        // convert audio buffer to wav buffer by header to it.
         byte[] mainAudioData = convertWaveFile(audioBuffer);
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
-            // Do the file write
+
+            // writing the final byte array to file to creating the wav file
             writeByteToFile(mainAudioData);
 
         } else {
@@ -1022,8 +1009,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             ActivityCompat.requestPermissions(this,
                     new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 0);
         }
-
-
 
         Log.d("XXX", Arrays.toString(mainAudioData));
 
@@ -1194,9 +1179,14 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
                     // Forward Fourier Transform
                     float[] forwardFT = realForwardFT(temp);
+
                     //Calculate absolute
                     float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
+
+                    // Calculate Phase Angle values for estimated complex values
                     float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
+
+                    // ArrayChunk will return 1d array to 2d and inBuffer is the input to model 1
                     inBuffer = ArrayChunk(absValues, 257);
 
                     long preProcessEnd=System.currentTimeMillis();
@@ -1204,23 +1194,26 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     pre1.add(((double)(preProcessEnd-preprocessStart)/1000.0d));
 
                     final long model1start = System.currentTimeMillis();
-                    // model process
+
+                    // model1 process
                     initTflite1(TFLITE_FILE_1);
                     if (i == 0) {
                         feedTFLite1(inputShapeA(inBuffer), inputShapeB(null));
                     } else {
                         feedTFLite1(inputShapeA(inBuffer), inputShapeB("hashMapOutputB"));
                     }
+
                     final long model1end = System.currentTimeMillis();
                     Log.d("time", "The process was running: Model 1 - " + ((double)(model1end-model1start)/1000.0d) + "sec");
                     model1time.add((double)(model1end-model1start)/1000.0d);
 
                     final long preprocess2Start = System.currentTimeMillis();
+
                     //estimate values in 1d array
-                    float[] forInverseFFT = estimatedComplex(absValues, outputOfModel1, getPhaseValues);
+                    float[] estimatedComplexValues = estimatedComplex(absValues, outputOfModel1, getPhaseValues);
 
                     // Inverse Fourier Transform
-                    float[] inverseFFT = realInverseFT(forInverseFFT);
+                    float[] inverseFFT = realInverseFT(estimatedComplexValues);
 
                     //convert 1d array to 2d array of output of inverse fft
                     float[][] array2d = ArrayChunk(inverseFFT, 512);
@@ -1233,15 +1226,16 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     Log.d("time", "The process was running: Preprocess 2 - " + ((double)(preprocess2End-preprocess2Start)/1000.0d) + "sec");
                     pre2.add((double)(preprocess2End-preprocess2Start)/1000.0d);
 
-
                     final long model2start = System.currentTimeMillis();
-                    initTflite2(TFLITE_FILE_2);
 
+                    // model2 process
+                    initTflite2(TFLITE_FILE_2);
                     if (i == 0) {
                         feedTFLite2(array3d, inputShapeD(null), i);
                     } else {
                         feedTFLite2(array3d, inputShapeD("hashMapOutputD"), i);
                     }
+
                     final long model2end = System.currentTimeMillis();
                     Log.d("time", "The process was running: Model 2- " + ((double)(model2end-model2start)/1000.0d) + "sec");
                     model2time.add((double)(model2end-model2start)/1000.0d);
@@ -1259,7 +1253,10 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
 
                 final long audioProcess = System.currentTimeMillis();
+
+                // convert 1d float array to Byte array
                 writeFloatToByte(completeBuffer);
+
                 final long audioProcessEnd = System.currentTimeMillis();
                 Log.d("time", "The process was running: Audio Process- " + ((double)(audioProcessEnd-audioProcess)/1000.0d) + "sec");
 
