@@ -1,6 +1,8 @@
 package org.tensorflow.lite.examples.asr;
 
 import static android.Manifest.permission.MANAGE_EXTERNAL_STORAGE;
+import static android.Manifest.permission.READ_EXTERNAL_STORAGE;
+import static android.Manifest.permission.RECORD_AUDIO;
 import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
 
 import android.Manifest;
@@ -105,6 +107,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     File cleanDir = new File(saveDir.getAbsolutePath() + "/clean");
     File cleanAudioFIle = new File(cleanDir.getAbsolutePath() + "/cleanAudio.wav");
 
+    double total = 0;
+    double avg = 0;
+
 
 
 
@@ -132,14 +137,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             @RequiresApi(api = Build.VERSION_CODES.M)
             @Override
             public void onClick(View view) {
-                final long start = System.currentTimeMillis();
+
 
                 AsyncTaskExample asyncTask=new AsyncTaskExample();
                 asyncTask.execute();
 
-
-                final long end = System.currentTimeMillis();
-                Log.d("time", "The program was running: " + ((double)(end-start)/1000.0d) + "sec");
 
             }
         });
@@ -953,7 +955,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private void tfliteOutput1(Map<Integer, Object> outputMap) {
         float[][][] hashMapOutput1 = (float[][][]) outputMap.get(0);
         hashMapOutputB = (float[][][][]) outputMap.get(1);
-
         // outputModel1 is 1d array extract from 3d array used for estimated complex.
         outputOfModel1 = hashMapOutput1[0][0];
         Log.d("cc", "" + outputOfModel1);
@@ -1043,6 +1044,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         // Catch block to handle the exceptions
         catch (Exception e) {
             Log.d("xxx", e.getMessage());
+            Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1069,7 +1071,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         }
         return null;
     }
-
 
     private byte[] writeWaveFileHeader(long totalAudioLen, long totalDataLen, long longSampleRate, int channels, long byteRate) throws IOException {
         byte[] header = new byte[44];
@@ -1140,26 +1141,29 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     private void requestPermission() {
         ActivityCompat.requestPermissions(MainActivity.this, new
-                String[]{WRITE_EXTERNAL_STORAGE, MANAGE_EXTERNAL_STORAGE}, 1);
+                String[]{WRITE_EXTERNAL_STORAGE, MANAGE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,RECORD_AUDIO}, 1);
     }
 
 
     private class AsyncTaskExample extends AsyncTask<Void, Void, Void> {
         @Override
         protected Void doInBackground(Void... voids) {
+            ArrayList<Double> pre1=new ArrayList<>();
+            ArrayList<Double> pre2=new ArrayList<>();
+            ArrayList<Double> model1time=new ArrayList<>();
+            ArrayList<Double> model2time=new ArrayList<>();
+
+            long preprocessStart = System.currentTimeMillis();
 
 
             try {
 
-                if (checkPermission()) {
-
-                } else {
+                if (checkPermission()) {} else {
                     requestPermission();
                 }
 
                 // full audio buffer
                 audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
-
 
                 // audio buffer of size 128
                 chunkData = ArrayChunk(audioFeatureValues, 128);
@@ -1190,12 +1194,16 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
                     // Forward Fourier Transform
                     float[] forwardFT = realForwardFT(temp);
-
-
                     //Calculate absolute
                     float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
                     float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
                     inBuffer = ArrayChunk(absValues, 257);
+
+                    long preProcessEnd=System.currentTimeMillis();
+                    Log.d("time", "The process was running: preProcess 1 - " + ((double)(preProcessEnd-preprocessStart)/1000.0d) + "sec");
+                    pre1.add(((double)(preProcessEnd-preprocessStart)/1000.0d));
+
+                    final long model1start = System.currentTimeMillis();
                     // model process
                     initTflite1(TFLITE_FILE_1);
                     if (i == 0) {
@@ -1203,6 +1211,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     } else {
                         feedTFLite1(inputShapeA(inBuffer), inputShapeB("hashMapOutputB"));
                     }
+                    final long model1end = System.currentTimeMillis();
+                    Log.d("time", "The process was running: Model 1 - " + ((double)(model1end-model1start)/1000.0d) + "sec");
+                    model1time.add((double)(model1end-model1start)/1000.0d);
+
+                    final long preprocess2Start = System.currentTimeMillis();
                     //estimate values in 1d array
                     float[] forInverseFFT = estimatedComplex(absValues, outputOfModel1, getPhaseValues);
 
@@ -1215,6 +1228,13 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     // convert the 2d array to 3d array
                     float[][][] array3d = inputShapeC(array2d);
 
+
+                    final long preprocess2End = System.currentTimeMillis();
+                    Log.d("time", "The process was running: Preprocess 2 - " + ((double)(preprocess2End-preprocess2Start)/1000.0d) + "sec");
+                    pre2.add((double)(preprocess2End-preprocess2Start)/1000.0d);
+
+
+                    final long model2start = System.currentTimeMillis();
                     initTflite2(TFLITE_FILE_2);
 
                     if (i == 0) {
@@ -1222,9 +1242,26 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     } else {
                         feedTFLite2(array3d, inputShapeD("hashMapOutputD"), i);
                     }
+                    final long model2end = System.currentTimeMillis();
+                    Log.d("time", "The process was running: Model 2- " + ((double)(model2end-model2start)/1000.0d) + "sec");
+                    model2time.add((double)(model2end-model2start)/1000.0d);
                 }
 
+                total=0;avg=0;
+                calculateTime(pre1, "pre1");
+                total=0;avg=0;
+                calculateTime(model1time, "model1time");
+                total=0;avg=0;
+                calculateTime(pre2, "pre2");
+                total=0;avg=0;
+                calculateTime(model2time, "model2time");
+                total=0;avg=0;
+
+
+                final long audioProcess = System.currentTimeMillis();
                 writeFloatToByte(completeBuffer);
+                final long audioProcessEnd = System.currentTimeMillis();
+                Log.d("time", "The process was running: Audio Process- " + ((double)(audioProcessEnd-audioProcess)/1000.0d) + "sec");
 
 
 
@@ -1232,6 +1269,10 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             } catch (Exception e) {
                 Log.e(TAG + " Exception", e.getMessage());
             }
+
+            final long totalend = System.currentTimeMillis();
+            Log.d("time", "The program was running: Total -" + ((double)(totalend-preprocessStart)/1000.0d) + "sec");
+
             return null;
         }
 
@@ -1248,6 +1289,15 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             progressBar.setVisibility(View.GONE);
             Toast.makeText(getApplicationContext(),"Completed",Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void calculateTime(ArrayList<Double> arrayList, String tag) {
+        for(int i = 0; i < arrayList.size(); i++) {
+            total += arrayList.get(i);
+        }
+        avg = total / arrayList.size();
+        Log.d("The Average IS of "+ tag +" ",  String.valueOf(avg));
+
     }
 }
 
