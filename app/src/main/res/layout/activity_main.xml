@@ -8,7 +8,8 @@
 
 
     <LinearLayout
-        android:layout_width="wrap_content"
+        android:id="@+id/linearLayout"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
@@ -16,36 +17,55 @@
             android:id="@+id/prompt"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="25dp"
+            android:layout_marginBottom="20dp"
+            android:layout_marginStart="10dp"
+            android:layout_marginTop="5dp"
             android:text="Please choose an audio clip:"
-            android:layout_marginBottom="20dp"></TextView>
+            android:textSize="25dp" />
 
         <Spinner
             android:id="@+id/audio_clip_spinner"
-            android:layout_width="wrap_content"
+            android:layout_marginStart="20dp"
+            android:layout_width="100dp"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="20dp"/>
+            android:layout_marginBottom="20dp" />
 
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="20dp">
+            android:layout_marginBottom="10dp"
+            android:orientation="horizontal">
 
             <Button
                 android:id="@+id/play"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginRight="10dp"
-                android:text="Play audio"/>
+                android:layout_marginStart="10dp"
+                android:layout_marginEnd="10dp"
+                android:text="Play audio" />
 
             <Button
                 android:id="@+id/recognize"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Transcribe"/>
+                android:text="Transcribe" />
+
+            <Button
+                android:id="@+id/btnPlayClean"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="5dp"
+                android:layout_weight="1"
+                android:text="Play Clean" />
 
         </LinearLayout>
+
+        <Button
+            android:id="@+id/btnStop"
+            android:layout_width="260dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:text="Stop " />
 
         <TextView
             android:id="@+id/result"
@@ -54,5 +74,15 @@
             android:textSize="20dp"></TextView>
 
     </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="244dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

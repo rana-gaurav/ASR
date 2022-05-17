@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.content.res.AssetFileDescriptor;
 import android.content.res.AssetManager;
 import android.media.MediaPlayer;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -17,6 +18,7 @@ import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.ProgressBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -54,12 +56,15 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private Spinner audioClipSpinner;
     private Button transcribeButton;
     private Button playAudioButton;
+    private Button stopAudioButton;
+    private Button playCleanButton;
+    private ProgressBar progressBar;
     private TextView resultTextview;
 
     private final static int SAMPLE_RATE = 16000;
     private final static int DEFAULT_AUDIO_DURATION = -1;
 
-    private final static String[] WAV_FILENAMES = {"ajay.wav", "audio_cut.wav", "a1.wav"};
+    private final static String[] WAV_FILENAMES = {"ajay.wav", "audio_cut.wav", "a1.wav","a2.wav","a3.wav","a4.wav","a5.wav","a6.wav","a7.wav","a8.wav","a9.wav","a10.wav"};
 
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
@@ -90,7 +95,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     private MappedByteBuffer tfLiteModel1, tfLiteModel2;
     private Interpreter tfLite1, tfLite2;
-    private MediaPlayer mediaPlayer;
+    private MediaPlayer mediaPlayer,mp;
     JLibrosa jLibrosa;
 
     ContextWrapper cw = new ContextWrapper(this);
@@ -98,7 +103,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     File saveDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/ActiveNoise");
     File originalDir = new File(saveDir.getAbsolutePath() + "/original");
     File cleanDir = new File(saveDir.getAbsolutePath() + "/clean");
-    File cleanAudioFIle = new File(cleanDir.getAbsolutePath() + "/cleanAudio8.wav");
+    File cleanAudioFIle = new File(cleanDir.getAbsolutePath() + "/cleanAudio.wav");
 
 
 
@@ -128,91 +133,50 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             @Override
             public void onClick(View view) {
                 final long start = System.currentTimeMillis();
+
+                AsyncTaskExample asyncTask=new AsyncTaskExample();
+                asyncTask.execute();
+
+
+                final long end = System.currentTimeMillis();
+                Log.d("time", "The program was running: " + ((double)(end-start)/1000.0d) + "sec");
+
+            }
+        });
+
+        playCleanButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
                 try {
-
-                    if (checkPermission()) {
-
-                    } else {
-                        requestPermission();
+                    if(mediaPlayer.isPlaying()){
+                        mediaPlayer.stop();
                     }
-
-                    // full audio buffer
-                    audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
-
-
-                    // audio buffer of size 128
-                    chunkData = ArrayChunk(audioFeatureValues, 128);
-
-                    // cal of number of blocks
-                    numBlocks = (audioFeatureValues.length - (blockLength - blockShift)) / blockShift;
-
-                    completeBuffer = new float[audioFeatureValues.length];
-
-                    // init of output1 and output2 regrading size of model output
-                    initOutput1();
-                    initOutput2();
-
-                    float part1[] = new float[512];
-                    float[] temp = new float[512];
-
-                    for (int i = 0; i < numBlocks; i++) {
-
-
-                        Log.d("data", "" + i);
-
-                        System.arraycopy(part1, 128, part1, 0, 384);
-                        System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
-
-
-                        System.arraycopy(part1, 0, temp, 0, 512);
-                        // temp=part1;
-
-                        // Forward Fourier Transform
-                        float[] forwardFT = realForwardFT(temp);
-
-
-                        //Calculate absolute
-                        float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
-                        float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
-                        inBuffer = ArrayChunk(absValues, 257);
-                        // model process
-                        initTflite1(TFLITE_FILE_1);
-                        if (i == 0) {
-                            feedTFLite1(inputShapeA(inBuffer), inputShapeB(null));
-                        } else {
-                            feedTFLite1(inputShapeA(inBuffer), inputShapeB("hashMapOutputB"));
-                        }
-                        //estimate values in 1d array
-                        float[] forInverseFFT = estimatedComplex(absValues, outputOfModel1, getPhaseValues);
-
-                        // Inverse Fourier Transform
-                        float[] inverseFFT = realInverseFT(forInverseFFT);
-
-                        //convert 1d array to 2d array of output of inverse fft
-                        float[][] array2d = ArrayChunk(inverseFFT, 512);
-
-                        // convert the 2d array to 3d array
-                        float[][][] array3d = inputShapeC(array2d);
-
-                        initTflite2(TFLITE_FILE_2);
-
-                        if (i == 0) {
-                            feedTFLite2(array3d, inputShapeD(null), i);
-                        } else {
-                            feedTFLite2(array3d, inputShapeD("hashMapOutputD"), i);
-                        }
-                    }
-
-                    writeFloatToByte(completeBuffer);
-
-                    final long end = System.currentTimeMillis();
-                    Log.d("time", "The program was running: " + ((double)(end-start)/1000.0d) + "sec");
-                    Log.d("dd", "success" + outputBuffer);
+                    //mp.reset();
+                    mp.setDataSource(String.valueOf(cleanAudioFIle));
+                    mp.prepare();
+                } catch (IllegalArgumentException e) {
+                    e.printStackTrace();
                 } catch (Exception e) {
-                    Log.e(TAG + " Exception", e.getMessage());
+                    System.out.println("Exception of type : " + e.toString());
+                    e.printStackTrace();
+                }
+
+                mp.start();
+            }
+        });
+
+        stopAudioButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (mediaPlayer != null || mp!=null) {
+                    mediaPlayer.pause();
+                    mp.pause();
+                   // mediaPlayer.release();
                 }
             }
         });
+
+
     }
 
     @Override
@@ -249,7 +213,15 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         transcribeButton = findViewById(R.id.recognize);
         resultTextview = findViewById(R.id.result);
 
+        stopAudioButton=findViewById(R.id.btnStop);
+        playCleanButton=findViewById(R.id.btnPlayClean);
+        progressBar=findViewById(R.id.progressBar);
+
+       //progressBar.setVisibility(View.GONE);
+
+
         mediaPlayer = new MediaPlayer();
+        mp = new MediaPlayer();
 
 
         if (!saveDir.exists()) saveDir.mkdirs();
@@ -1066,7 +1038,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             os.write(bytes);
             // Close the file connections
             os.close();
-            Toast.makeText(getApplicationContext(),"Completed",Toast.LENGTH_SHORT).show();
+
         }
         // Catch block to handle the exceptions
         catch (Exception e) {
@@ -1171,4 +1143,113 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 String[]{WRITE_EXTERNAL_STORAGE, MANAGE_EXTERNAL_STORAGE}, 1);
     }
 
+
+    private class AsyncTaskExample extends AsyncTask<Void, Void, Void> {
+        @Override
+        protected Void doInBackground(Void... voids) {
+
+
+            try {
+
+                if (checkPermission()) {
+
+                } else {
+                    requestPermission();
+                }
+
+                // full audio buffer
+                audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+
+
+                // audio buffer of size 128
+                chunkData = ArrayChunk(audioFeatureValues, 128);
+
+                // cal of number of blocks
+                numBlocks = (audioFeatureValues.length - (blockLength - blockShift)) / blockShift;
+
+                completeBuffer = new float[audioFeatureValues.length];
+
+                // init of output1 and output2 regrading size of model output
+                initOutput1();
+                initOutput2();
+
+                float part1[] = new float[512];
+                float[] temp = new float[512];
+
+                for (int i = 0; i < numBlocks; i++) {
+
+
+                    Log.d("data", "" + i);
+
+                    System.arraycopy(part1, 128, part1, 0, 384);
+                    System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
+
+
+                    System.arraycopy(part1, 0, temp, 0, 512);
+                    // temp=part1;
+
+                    // Forward Fourier Transform
+                    float[] forwardFT = realForwardFT(temp);
+
+
+                    //Calculate absolute
+                    float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
+                    float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
+                    inBuffer = ArrayChunk(absValues, 257);
+                    // model process
+                    initTflite1(TFLITE_FILE_1);
+                    if (i == 0) {
+                        feedTFLite1(inputShapeA(inBuffer), inputShapeB(null));
+                    } else {
+                        feedTFLite1(inputShapeA(inBuffer), inputShapeB("hashMapOutputB"));
+                    }
+                    //estimate values in 1d array
+                    float[] forInverseFFT = estimatedComplex(absValues, outputOfModel1, getPhaseValues);
+
+                    // Inverse Fourier Transform
+                    float[] inverseFFT = realInverseFT(forInverseFFT);
+
+                    //convert 1d array to 2d array of output of inverse fft
+                    float[][] array2d = ArrayChunk(inverseFFT, 512);
+
+                    // convert the 2d array to 3d array
+                    float[][][] array3d = inputShapeC(array2d);
+
+                    initTflite2(TFLITE_FILE_2);
+
+                    if (i == 0) {
+                        feedTFLite2(array3d, inputShapeD(null), i);
+                    } else {
+                        feedTFLite2(array3d, inputShapeD("hashMapOutputD"), i);
+                    }
+                }
+
+                writeFloatToByte(completeBuffer);
+
+
+
+                Log.d("dd", "success" + outputBuffer);
+            } catch (Exception e) {
+                Log.e(TAG + " Exception", e.getMessage());
+            }
+            return null;
+        }
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+            progressBar.setVisibility(View.VISIBLE);
+
+        }
+
+        @Override
+        protected void onPostExecute(Void unused) {
+            super.onPostExecute(unused);
+            progressBar.setVisibility(View.GONE);
+            Toast.makeText(getApplicationContext(),"Completed",Toast.LENGTH_SHORT).show();
+        }
+    }
 }
+
+
+
