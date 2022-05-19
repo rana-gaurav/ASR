@@ -15,6 +15,7 @@ import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
 import android.util.Log;
 import android.view.View;
 import android.widget.AdapterView;
@@ -31,6 +32,8 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.jlibrosa.audio.JLibrosa;
+import com.jlibrosa.audio.exception.FileFormatNotSupportedException;
+import com.jlibrosa.audio.wavFile.WavFileException;
 
 import org.jtransforms.fft.FloatFFT_1D;
 import org.tensorflow.lite.Interpreter;
@@ -71,7 +74,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private final static int DEFAULT_AUDIO_DURATION = -1;
     protected static final int BYTES_PER_FLOAT = Float.SIZE / 8;
 
-    private final static String[] WAV_FILENAMES = {"ajay.wav", "audio_cut.wav", "a1.wav","a2.wav","a3.wav","a4.wav","a5.wav","a6.wav","a7.wav","a8.wav","a9.wav","a10.wav"};
+    private final static String[] WAV_FILENAMES = {"ajay.wav", "audio_cut.wav", "a1.wav","a2.wav","door1.wav","door2.wav","door3.wav","door4.wav","door5.wav","door6.wav","door7.wav","door8.wav","door9.wav"};
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
     private String wavFilename;
@@ -229,8 +232,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     public void onNothingSelected(AdapterView<?> parent) {
     }
 
-    private static MappedByteBuffer loadModelFile(AssetManager assets, String modelFilename)
-            throws IOException {
+    private static MappedByteBuffer loadModelFile(AssetManager assets, String modelFilename) throws IOException {
         AssetFileDescriptor fileDescriptor = assets.openFd(modelFilename);
         FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
         FileChannel fileChannel = inputStream.getChannel();
@@ -1133,13 +1135,17 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private class AsyncTaskExample extends AsyncTask<Void, Void, Void> {
         @Override
         protected Void doInBackground(Void... voids) {
+
             ArrayList<Double> pre1=new ArrayList<>();
             ArrayList<Double> pre2=new ArrayList<>();
             ArrayList<Double> model1time=new ArrayList<>();
             ArrayList<Double> model2time=new ArrayList<>();
+            ArrayList<Double> audioRead=new ArrayList<>();
+            ArrayList<Double> blockShiftTime=new ArrayList<>();
+            ArrayList<Double> fft=new ArrayList<>();
+            ArrayList<Double> absEStTime=new ArrayList<>();
 
-            long preprocessStart = System.currentTimeMillis();
-
+            final long totalstart = System.currentTimeMillis();
 
             try {
 
@@ -1147,8 +1153,27 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     requestPermission();
                 }
 
-                // full audio buffer
-                audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+                long readAudioFileStart = System.currentTimeMillis();
+
+
+               Thread t1 = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        //function one or whatever
+                        try {
+                            // full audio buffer
+                            audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+                             } catch (IOException | WavFileException | FileFormatNotSupportedException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                });
+               t1.start();
+
+
+                long readAudioFileEnd = System.currentTimeMillis();
+                Log.d("time", "The process was running: full audio buffer:- " + ((double)(readAudioFileEnd-readAudioFileStart)/1000.0d) + "sec");
+                audioRead.add((double)(readAudioFileEnd-readAudioFileStart)/1000.0d);
 
                 // audio buffer of size 128
                 chunkData = ArrayChunk(audioFeatureValues, 128);
@@ -1165,26 +1190,42 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 float part1[] = new float[512];
                 float[] temp = new float[512];
 
+
+
                 for (int i = 0; i < numBlocks; i++) {
 
+                    long preprocessStart = System.currentTimeMillis();
 
                     Log.d("data", "" + i);
+                    long blockShiftStart = System.currentTimeMillis();
 
                     System.arraycopy(part1, 128, part1, 0, 384);
                     System.arraycopy(chunkData[i], 0, part1, 384, chunkData[i].length);
-
-
                     System.arraycopy(part1, 0, temp, 0, 512);
-                    // temp=part1;
+
+                    long blockShiftEnd = System.currentTimeMillis();
+                    Log.d("time", "The process was running: Block shifting:- " + ((double)(blockShiftEnd-blockShiftStart)/1000.0d) + "sec");
+                    blockShiftTime.add((double)(blockShiftEnd-blockShiftStart)/1000.0d);
+
+                    long fftStart = System.currentTimeMillis();
 
                     // Forward Fourier Transform
                     float[] forwardFT = realForwardFT(temp);
 
+                    long fftEnd = System.currentTimeMillis();
+                    Log.d("time", "The process was running: FFT:- " + ((double)(fftEnd-fftStart)/1000.0d) + "sec");
+                    fft.add((double)(fftEnd-fftStart)/1000.0d);
+
+                    long absEstStart = System.currentTimeMillis();
                     //Calculate absolute
                     float[] absValues = getAbs(getPart("real", forwardFT), getPart("img", forwardFT));
 
                     // Calculate Phase Angle values for estimated complex values
                     float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
+
+                    long absEstEnd = System.currentTimeMillis();
+                    Log.d("time", "The process was running: ABS and PhaseAngle:- " + ((double)(absEstEnd-absEstStart)/1000.0d) + "sec");
+                    absEStTime.add((double)(absEstEnd-absEstStart)/1000.0d);
 
                     // ArrayChunk will return 1d array to 2d and inBuffer is the input to model 1
                     inBuffer = ArrayChunk(absValues, 257);
@@ -1250,6 +1291,14 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 total=0;avg=0;
                 calculateTime(model2time, "model2time");
                 total=0;avg=0;
+                calculateTime(audioRead, "audioRead");
+                total=0;avg=0;
+                calculateTime(blockShiftTime, "blockShiftTime");
+                total=0;avg=0;
+                calculateTime(fft, "fft");
+                total=0;avg=0;
+                calculateTime(absEStTime, "absEStTime");
+                total=0;avg=0;
 
 
                 final long audioProcess = System.currentTimeMillis();
@@ -1258,17 +1307,16 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 writeFloatToByte(completeBuffer);
 
                 final long audioProcessEnd = System.currentTimeMillis();
-                Log.d("time", "The process was running: Audio Process- " + ((double)(audioProcessEnd-audioProcess)/1000.0d) + "sec");
+                Log.d("time", "The process was running: Clean Audio File creation- " + ((double)(audioProcessEnd-audioProcess)/1000.0d) + "sec");
 
 
-
-                Log.d("dd", "success" + outputBuffer);
+                //Log.d("dd", "success" + outputBuffer);
             } catch (Exception e) {
                 Log.e(TAG + " Exception", e.getMessage());
             }
 
             final long totalend = System.currentTimeMillis();
-            Log.d("time", "The program was running: Total -" + ((double)(totalend-preprocessStart)/1000.0d) + "sec");
+            Log.d("time", "The program was running: Total -" + ((double)(totalend-totalstart)/1000.0d) + "sec");
 
             return null;
         }
@@ -1293,8 +1341,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             total += arrayList.get(i);
         }
         avg = total / arrayList.size();
-        Log.d("The Average IS of "+ tag +" ",  String.valueOf(avg));
-
+        Log.d("time","The total is of "+ tag +":: "+String.format("%.6f", total)+" sec");
+        //Log.d("time","The Average IS of "+ tag +" "+String.format("%.6f", avg)+" sec");
+        //resultTextview.append("The Average IS of "+ tag + " "+String.format("%.3f", avg)+" sec \n");
     }
 }
 
