@@ -15,7 +15,6 @@ import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.Handler;
 import android.util.Log;
 import android.view.View;
 import android.widget.AdapterView;
@@ -32,8 +31,6 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.jlibrosa.audio.JLibrosa;
-import com.jlibrosa.audio.exception.FileFormatNotSupportedException;
-import com.jlibrosa.audio.wavFile.WavFileException;
 
 import org.jtransforms.fft.FloatFFT_1D;
 import org.tensorflow.lite.Interpreter;
@@ -53,6 +50,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 public class MainActivity extends AppCompatActivity implements AdapterView.OnItemSelectedListener {
 
@@ -66,6 +66,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private ProgressBar progressBar;
     private TextView resultTextview;
 
+
     private int numBlocks;
     private int blockShift = 128;
     private int blockLength = 512;
@@ -74,7 +75,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private final static int DEFAULT_AUDIO_DURATION = -1;
     protected static final int BYTES_PER_FLOAT = Float.SIZE / 8;
 
-    private final static String[] WAV_FILENAMES = {"audio_cut.wav","ajay.wav","a1.wav","a2.wav","door1.wav","door2.wav","door3.wav","door4.wav","door5.wav","door6.wav","door7.wav","door8.wav","door9.wav"};
+    private final static String[] WAV_FILENAMES = {"audio_cut.wav", "ajay.wav", "a1.wav", "a2.wav", "door1.wav", "door2.wav", "door3.wav", "door4.wav", "door5.wav", "door6.wav", "door7.wav", "door8.wav", "door9.wav"};
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
     private String wavFilename;
@@ -98,7 +99,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     private MappedByteBuffer tfLiteModel1, tfLiteModel2;
     private Interpreter tfLite1, tfLite2;
-    private MediaPlayer mediaPlayer,mp;
+    private MediaPlayer mediaPlayer, mp;
     JLibrosa jLibrosa;
 
     ContextWrapper cw = new ContextWrapper(this);
@@ -110,6 +111,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     private double total = 0;
     private double avg = 0;
+
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -142,7 +145,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             public void onClick(View view) {
 
 
-                AsyncTaskExample asyncTask=new AsyncTaskExample();
+                AsyncTaskExample asyncTask = new AsyncTaskExample();
                 asyncTask.execute();
 
 
@@ -153,7 +156,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             @Override
             public void onClick(View v) {
                 try {
-                    if(mediaPlayer.isPlaying()){
+                    if (mediaPlayer.isPlaying()) {
                         mediaPlayer.stop();
                     }
                     //mp.reset();
@@ -172,10 +175,10 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         stopAudioButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (mediaPlayer != null || mp!=null) {
+                if (mediaPlayer != null || mp != null) {
                     mediaPlayer.pause();
                     mp.pause();
-                   // mediaPlayer.release();
+                    // mediaPlayer.release();
                 }
             }
         });
@@ -183,7 +186,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode,String permissions[], int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         switch (requestCode) {
             case 1:
@@ -216,9 +219,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         transcribeButton = findViewById(R.id.recognize);
         resultTextview = findViewById(R.id.result);
 
-        stopAudioButton=findViewById(R.id.btnStop);
-        playCleanButton=findViewById(R.id.btnPlayClean);
-        progressBar=findViewById(R.id.progressBar);
+        stopAudioButton = findViewById(R.id.btnStop);
+        playCleanButton = findViewById(R.id.btnPlayClean);
+        progressBar = findViewById(R.id.progressBar);
 
         mediaPlayer = new MediaPlayer();
         mp = new MediaPlayer();
@@ -978,7 +981,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     }
 
     public void writeFloatToByte(float[] array) throws IOException {
-        byte[] audioBuffer = new byte[array.length*4];
+        byte[] audioBuffer = new byte[array.length * 4];
 
         /*for (int i = 0; i < array.length; i++) {
             byte[] byteArray = ByteBuffer.allocate(4).putFloat(array[i] * 32767).array();
@@ -993,12 +996,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 */
 
         ByteBuffer buffer = ByteBuffer.allocate(BYTES_PER_FLOAT * array.length).
-                        order(ByteOrder.LITTLE_ENDIAN);
+                order(ByteOrder.LITTLE_ENDIAN);
         for (float f : array) {
             //buffer.putFloat(f);
             buffer.putShort((short) (f * 32768F));
         }
-        audioBuffer= buffer.array();
+        audioBuffer = buffer.array();
 
         Log.d("XXX", Arrays.toString(audioBuffer));
 
@@ -1036,7 +1039,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         // Catch block to handle the exceptions
         catch (Exception e) {
             Log.d("time", e.getMessage());
-            Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();
+            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1133,13 +1136,13 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     private void requestPermission() {
         ActivityCompat.requestPermissions(MainActivity.this, new
-                String[]{WRITE_EXTERNAL_STORAGE, MANAGE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,RECORD_AUDIO}, 1);
+                String[]{WRITE_EXTERNAL_STORAGE, MANAGE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, RECORD_AUDIO}, 1);
     }
 
-    private String getFilePath(){
-        ContextWrapper cw=new ContextWrapper(getApplicationContext());
-        File f=cw.getExternalFilesDir(Environment.DIRECTORY_MUSIC);
-        File file=new File(f,"sample"+".wav");
+    private String getFilePath() {
+        ContextWrapper cw = new ContextWrapper(getApplicationContext());
+        File f = cw.getExternalFilesDir(Environment.DIRECTORY_MUSIC);
+        File file = new File(f, "sample" + ".wav");
 
         return file.getPath();
     }
@@ -1149,20 +1152,28 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         @Override
         protected Void doInBackground(Void... voids) {
 
-            ArrayList<Double> pre1=new ArrayList<>();
-            ArrayList<Double> pre2=new ArrayList<>();
-            ArrayList<Double> model1time=new ArrayList<>();
-            ArrayList<Double> model2time=new ArrayList<>();
-            ArrayList<Double> audioRead=new ArrayList<>();
-            ArrayList<Double> blockShiftTime=new ArrayList<>();
-            ArrayList<Double> fft=new ArrayList<>();
-            ArrayList<Double> absEStTime=new ArrayList<>();
+            ArrayList<Double> pre1 = new ArrayList<>();
+            ArrayList<Double> pre2 = new ArrayList<>();
+            ArrayList<Double> model1time = new ArrayList<>();
+            ArrayList<Double> model2time = new ArrayList<>();
+            ArrayList<Double> audioRead = new ArrayList<>();
+            ArrayList<Double> blockShiftTime = new ArrayList<>();
+            ArrayList<Double> fft = new ArrayList<>();
+            ArrayList<Double> absEStTime = new ArrayList<>();
 
             final long totalstart = System.currentTimeMillis();
+
+            // Create an executor that executes tasks in the main thread.
+            Executor mainExecutor = ContextCompat.getMainExecutor(getApplicationContext());
+
+            // Create an executor that executes tasks in a background thread.
+            ScheduledExecutorService backgroundExecutor = Executors.newSingleThreadScheduledExecutor();
 
             try {
 
                 long readAudioFileStart = System.currentTimeMillis();
+
+
                 // full audio buffer
                 audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
 
@@ -1181,8 +1192,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
 
                 long readAudioFileEnd = System.currentTimeMillis();
-                Log.d("time", "The process was running: full audio buffer:- " + ((double)(readAudioFileEnd-readAudioFileStart)/1000.0d) + "sec");
-                audioRead.add((double)(readAudioFileEnd-readAudioFileStart)/1000.0d);
+                Log.d("time", "The process was running: full audio buffer:- " + ((double) (readAudioFileEnd - readAudioFileStart) / 1000.0d) + "sec");
+                audioRead.add((double) (readAudioFileEnd - readAudioFileStart) / 1000.0d);
 
                 // audio buffer of size 128
                 chunkData = ArrayChunk(audioFeatureValues, 128);
@@ -1196,9 +1207,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 initOutput1();
                 initOutput2();
 
-                float part1[] = new float[512];
+                float[] part1 = new float[512];
                 float[] temp = new float[512];
-
 
 
                 for (int i = 0; i < numBlocks; i++) {
@@ -1213,8 +1223,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     System.arraycopy(part1, 0, temp, 0, 512);
 
                     long blockShiftEnd = System.currentTimeMillis();
-                    Log.d("time", "The process was running: Block shifting:- " + ((double)(blockShiftEnd-blockShiftStart)/1000.0d) + "sec");
-                    blockShiftTime.add((double)(blockShiftEnd-blockShiftStart)/1000.0d);
+                    Log.d("time", "The process was running: Block shifting:- " + ((double) (blockShiftEnd - blockShiftStart) / 1000.0d) + "sec");
+                    blockShiftTime.add((double) (blockShiftEnd - blockShiftStart) / 1000.0d);
 
                     long fftStart = System.currentTimeMillis();
 
@@ -1222,8 +1232,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     float[] forwardFT = realForwardFT(temp);
 
                     long fftEnd = System.currentTimeMillis();
-                    Log.d("time", "The process was running: FFT:- " + ((double)(fftEnd-fftStart)/1000.0d) + "sec");
-                    fft.add((double)(fftEnd-fftStart)/1000.0d);
+                    Log.d("time", "The process was running: FFT:- " + ((double) (fftEnd - fftStart) / 1000.0d) + "sec");
+                    fft.add((double) (fftEnd - fftStart) / 1000.0d);
 
                     long absEstStart = System.currentTimeMillis();
                     //Calculate absolute
@@ -1233,20 +1243,22 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     float[] getPhaseValues = getPhaseAngle(getPart("real", forwardFT), getPart("img", forwardFT));
 
                     long absEstEnd = System.currentTimeMillis();
-                    Log.d("time", "The process was running: ABS and PhaseAngle:- " + ((double)(absEstEnd-absEstStart)/1000.0d) + "sec");
-                    absEStTime.add((double)(absEstEnd-absEstStart)/1000.0d);
+                    Log.d("time", "The process was running: ABS and PhaseAngle:- " + ((double) (absEstEnd - absEstStart) / 1000.0d) + "sec");
+                    absEStTime.add((double) (absEstEnd - absEstStart) / 1000.0d);
 
                     // ArrayChunk will return 1d array to 2d and inBuffer is the input to model 1
                     inBuffer = ArrayChunk(absValues, 257);
 
-                    long preProcessEnd=System.currentTimeMillis();
-                    Log.d("time", "The process was running: preProcess 1 - " + ((double)(preProcessEnd-preprocessStart)/1000.0d) + "sec");
-                    pre1.add(((double)(preProcessEnd-preprocessStart)/1000.0d));
+                    long preProcessEnd = System.currentTimeMillis();
+                    Log.d("time", "The process was running: preProcess 1 - " + ((double) (preProcessEnd - preprocessStart) / 1000.0d) + "sec");
+                    pre1.add(((double) (preProcessEnd - preprocessStart) / 1000.0d));
 
                     final long model1start = System.currentTimeMillis();
 
                     // model1 process
                     initTflite1(TFLITE_FILE_1);
+
+
                     if (i == 0) {
                         feedTFLite1(inputShapeA(inBuffer), inputShapeB(null));
                     } else {
@@ -1254,8 +1266,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     }
 
                     final long model1end = System.currentTimeMillis();
-                    Log.d("time", "The process was running: Model 1 - " + ((double)(model1end-model1start)/1000.0d) + "sec");
-                    model1time.add((double)(model1end-model1start)/1000.0d);
+                    Log.d("time", "The process was running: Model 1 - " + ((double) (model1end - model1start) / 1000.0d) + "sec");
+                    model1time.add((double) (model1end - model1start) / 1000.0d);
 
                     final long preprocess2Start = System.currentTimeMillis();
 
@@ -1273,8 +1285,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
 
                     final long preprocess2End = System.currentTimeMillis();
-                    Log.d("time", "The process was running: Preprocess 2 - " + ((double)(preprocess2End-preprocess2Start)/1000.0d) + "sec");
-                    pre2.add((double)(preprocess2End-preprocess2Start)/1000.0d);
+                    Log.d("time", "The process was running: Preprocess 2 - " + ((double) (preprocess2End - preprocess2Start) / 1000.0d) + "sec");
+                    pre2.add((double) (preprocess2End - preprocess2Start) / 1000.0d);
 
                     final long model2start = System.currentTimeMillis();
 
@@ -1287,27 +1299,36 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     }
 
                     final long model2end = System.currentTimeMillis();
-                    Log.d("time", "The process was running: Model 2- " + ((double)(model2end-model2start)/1000.0d) + "sec");
-                    model2time.add((double)(model2end-model2start)/1000.0d);
+                    Log.d("time", "The process was running: Model 2- " + ((double) (model2end - model2start) / 1000.0d) + "sec");
+                    model2time.add((double) (model2end - model2start) / 1000.0d);
                 }
 
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
                 calculateTime(pre1, "pre1");
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
                 calculateTime(model1time, "model1time");
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
                 calculateTime(pre2, "pre2");
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
                 calculateTime(model2time, "model2time");
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
                 calculateTime(audioRead, "audioRead");
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
                 calculateTime(blockShiftTime, "blockShiftTime");
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
                 calculateTime(fft, "fft");
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
                 calculateTime(absEStTime, "absEStTime");
-                total=0;avg=0;
+                total = 0;
+                avg = 0;
 
 
                 final long audioProcess = System.currentTimeMillis();
@@ -1316,7 +1337,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 writeFloatToByte(completeBuffer);
 
                 final long audioProcessEnd = System.currentTimeMillis();
-                Log.d("total", "The process was running: Clean Audio File creation- " + ((double)(audioProcessEnd-audioProcess)/1000.0d) + "sec");
+                Log.d("total", "The process was running: Clean Audio File creation- " + ((double) (audioProcessEnd - audioProcess) / 1000.0d) + "sec");
 
 
                 //Log.d("dd", "success" + outputBuffer);
@@ -1325,7 +1346,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             }
 
             final long totalend = System.currentTimeMillis();
-            Log.d("time", "The program was running: Total -" + ((double)(totalend-totalstart)/1000.0d) + "sec");
+            Log.d("time", "The program was running: Total :" + ((double) (totalend - totalstart) / 1000.0d) + "sec \n ***************************************************");
+            runOnUiThread(() -> {
+                resultTextview.append("The program was running: Total :" + ((double) (totalend - totalstart) / 1000.0d) + "sec \n ***********************************************\n");
+            });
+
 
             return null;
         }
@@ -1341,18 +1366,21 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         protected void onPostExecute(Void unused) {
             super.onPostExecute(unused);
             progressBar.setVisibility(View.GONE);
-            Toast.makeText(getApplicationContext(),"Completed",Toast.LENGTH_SHORT).show();
+            Toast.makeText(getApplicationContext(), "Completed", Toast.LENGTH_SHORT).show();
         }
     }
 
     private void calculateTime(ArrayList<Double> arrayList, String tag) {
-        for(int i = 0; i < arrayList.size(); i++) {
-            total += arrayList.get(i);
-        }
-        avg = total / arrayList.size();
-        Log.d("total","The total is of "+ tag +":: "+String.format("%.6f", total)+" sec");
-        //Log.d("time","The Average IS of "+ tag +" "+String.format("%.6f", avg)+" sec");
-        //resultTextview.append("The Average IS of "+ tag + " "+String.format("%.3f", avg)+" sec \n");
+        runOnUiThread(() -> {
+            for (int i = 0; i < arrayList.size(); i++) {
+                total += arrayList.get(i);
+            }
+            avg = total / arrayList.size();
+            Log.d("total", "The total is of " + tag + ":: " + String.format("%.6f", total) + " sec");
+            //Log.d("time","The Average IS of "+ tag +" "+String.format("%.6f", avg)+" sec");
+            resultTextview.append("The total is of " + tag + ":: " + String.format("%.6f", total) + " sec \n");
+        });
+
     }
 }
 
