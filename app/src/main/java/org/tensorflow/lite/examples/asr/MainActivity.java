@@ -74,7 +74,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private final static int DEFAULT_AUDIO_DURATION = -1;
     protected static final int BYTES_PER_FLOAT = Float.SIZE / 8;
 
-    private final static String[] WAV_FILENAMES = {"ajay.wav", "audio_cut.wav", "a1.wav","a2.wav","door1.wav","door2.wav","door3.wav","door4.wav","door5.wav","door6.wav","door7.wav","door8.wav","door9.wav"};
+    private final static String[] WAV_FILENAMES = {"audio_cut.wav","ajay.wav","a1.wav","a2.wav","door1.wav","door2.wav","door3.wav","door4.wav","door5.wav","door6.wav","door7.wav","door8.wav","door9.wav"};
     private final static String TFLITE_FILE_1 = "model_1.tflite";
     private final static String TFLITE_FILE_2 = "model_2.tflite";
     private String wavFilename;
@@ -115,6 +115,11 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        if (!checkPermission()) {
+            requestPermission();
+        }
+
         jLibrosa = new JLibrosa();
         initViews();
         playAudioButton.setOnClickListener(new View.OnClickListener() {
@@ -152,7 +157,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                         mediaPlayer.stop();
                     }
                     //mp.reset();
-                    mp.setDataSource(String.valueOf(cleanAudioFIle));
+                    mp.setDataSource(getFilePath());
                     mp.prepare();
                 } catch (IllegalArgumentException e) {
                     e.printStackTrace();
@@ -1021,7 +1026,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         try {
             // Initialize a pointer in file
             // using OutputStream
-            DataOutputStream os = new DataOutputStream(new FileOutputStream(cleanAudioFIle));
+            DataOutputStream os = new DataOutputStream(new FileOutputStream(getFilePath()));
             // Starting writing the bytes in it
             os.write(bytes);
             // Close the file connections
@@ -1030,7 +1035,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         }
         // Catch block to handle the exceptions
         catch (Exception e) {
-            Log.d("xxx", e.getMessage());
+            Log.d("time", e.getMessage());
             Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();
         }
     }
@@ -1131,6 +1136,14 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 String[]{WRITE_EXTERNAL_STORAGE, MANAGE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,RECORD_AUDIO}, 1);
     }
 
+    private String getFilePath(){
+        ContextWrapper cw=new ContextWrapper(getApplicationContext());
+        File f=cw.getExternalFilesDir(Environment.DIRECTORY_MUSIC);
+        File file=new File(f,"sample"+".wav");
+
+        return file.getPath();
+    }
+
 
     private class AsyncTaskExample extends AsyncTask<Void, Void, Void> {
         @Override
@@ -1149,26 +1162,22 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
             try {
 
-                if (checkPermission()) {} else {
-                    requestPermission();
-                }
-
                 long readAudioFileStart = System.currentTimeMillis();
+                // full audio buffer
+                audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
 
-
-               Thread t1 = new Thread(new Runnable() {
+              /* Thread t1 = new Thread(new Runnable() {
                     @Override
                     public void run() {
                         //function one or whatever
                         try {
-                            // full audio buffer
-                            audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+
                              } catch (IOException | WavFileException | FileFormatNotSupportedException e) {
                             e.printStackTrace();
                         }
                     }
                 });
-               t1.start();
+               t1.start();*/
 
 
                 long readAudioFileEnd = System.currentTimeMillis();
@@ -1307,7 +1316,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 writeFloatToByte(completeBuffer);
 
                 final long audioProcessEnd = System.currentTimeMillis();
-                Log.d("time", "The process was running: Clean Audio File creation- " + ((double)(audioProcessEnd-audioProcess)/1000.0d) + "sec");
+                Log.d("total", "The process was running: Clean Audio File creation- " + ((double)(audioProcessEnd-audioProcess)/1000.0d) + "sec");
 
 
                 //Log.d("dd", "success" + outputBuffer);
@@ -1341,7 +1350,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             total += arrayList.get(i);
         }
         avg = total / arrayList.size();
-        Log.d("time","The total is of "+ tag +":: "+String.format("%.6f", total)+" sec");
+        Log.d("total","The total is of "+ tag +":: "+String.format("%.6f", total)+" sec");
         //Log.d("time","The Average IS of "+ tag +" "+String.format("%.6f", avg)+" sec");
         //resultTextview.append("The Average IS of "+ tag + " "+String.format("%.3f", avg)+" sec \n");
     }
