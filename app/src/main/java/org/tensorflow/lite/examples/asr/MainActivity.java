@@ -21,19 +21,26 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.LongDef;
 import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.jlibrosa.audio.JLibrosa;
+import com.jlibrosa.audio.exception.FileFormatNotSupportedException;
+import com.jlibrosa.audio.wavFile.WavFileException;
 
 import org.jtransforms.fft.FloatFFT_1D;
+import org.tensorflow.lite.Delegate;
 import org.tensorflow.lite.Interpreter;
+import org.tensorflow.lite.gpu.CompatibilityList;
+import org.tensorflow.lite.gpu.GpuDelegate;
 
 import java.io.DataOutputStream;
 import java.io.File;
@@ -51,6 +58,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -65,6 +73,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private Button playCleanButton;
     private ProgressBar progressBar;
     private TextView resultTextview;
+    private ScrollView scrollView;
 
 
     private int numBlocks;
@@ -102,15 +111,15 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
     private MediaPlayer mediaPlayer, mp;
     JLibrosa jLibrosa;
 
-    ContextWrapper cw = new ContextWrapper(this);
-
     File saveDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/ActiveNoise");
     File originalDir = new File(saveDir.getAbsolutePath() + "/original");
     File cleanDir = new File(saveDir.getAbsolutePath() + "/clean");
     File cleanAudioFIle = new File(cleanDir.getAbsolutePath() + "/cleanAudio.wav");
 
+
     private double total = 0;
     private double avg = 0;
+    private StringBuilder stringBuilder=new StringBuilder();
 
 
 
@@ -144,10 +153,8 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             @Override
             public void onClick(View view) {
 
-
                 AsyncTaskExample asyncTask = new AsyncTaskExample();
                 asyncTask.execute();
-
 
             }
         });
@@ -222,6 +229,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         stopAudioButton = findViewById(R.id.btnStop);
         playCleanButton = findViewById(R.id.btnPlayClean);
         progressBar = findViewById(R.id.progressBar);
+        scrollView = findViewById(R.id.sc_view);
+
+
 
         mediaPlayer = new MediaPlayer();
         mp = new MediaPlayer();
@@ -238,6 +248,14 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     @Override
     public void onNothingSelected(AdapterView<?> parent) {
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+
+        tfLite1.close();
+        tfLite2.close();
     }
 
     private static MappedByteBuffer loadModelFile(AssetManager assets, String modelFilename) throws IOException {
@@ -869,8 +887,19 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     private void initTflite1(String model) throws IOException {
         tfLiteModel1 = loadModelFile(getAssets(), model);
-        Interpreter.Options tfLiteOptions = new Interpreter.Options();
-        tfLite1 = new Interpreter(tfLiteModel1, tfLiteOptions);
+        Interpreter.Options tfLiteOptions1 = new Interpreter.Options();
+
+        /*CompatibilityList compatList= new CompatibilityList();
+        if(compatList.isDelegateSupportedOnThisDevice()){
+            GpuDelegate.Options delegateOptions= compatList.getBestOptionsForThisDevice();
+            GpuDelegate gpuDelegate=new GpuDelegate();
+            tfLiteOptions1.addDelegate(gpuDelegate);
+        }else {
+            // if the GPU is not supported, it will run on 4 threads
+            tfLiteOptions1.setNumThreads(4);
+        }
+*/
+        tfLite1 = new Interpreter(tfLiteModel1, tfLiteOptions1);
     }
 
     private void feedTFLite1(float[][][] f1, float[][][][] f2) {
@@ -882,8 +911,21 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
     private void initTflite2(String model) throws IOException {
         tfLiteModel2 = loadModelFile(getAssets(), model);
-        Interpreter.Options tfLiteOptions = new Interpreter.Options();
-        tfLite2 = new Interpreter(tfLiteModel2, tfLiteOptions);
+        Interpreter.Options tfLiteOptions2 = new Interpreter.Options();
+
+       /* CompatibilityList compatList= new CompatibilityList();
+        if(compatList.isDelegateSupportedOnThisDevice()){
+            //GpuDelegate.Options delegateOptions= compatList.getBestOptionsForThisDevice();
+            GpuDelegate gpuDelegate=new GpuDelegate();
+            tfLiteOptions2.addDelegate(gpuDelegate);
+            Log.d("XXX","Using GPU");
+        }else {
+            // if the GPU is not supported, it will run on 4 threads
+            tfLiteOptions2.setNumThreads(4);
+            Log.d("XXX","Not using GPU");
+        }
+*/
+        tfLite2 = new Interpreter(tfLiteModel2, tfLiteOptions2);
     }
 
     private void feedTFLite2(float[][][] f1, float[][][][] f2, int index) {
@@ -1059,8 +1101,6 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
             System.arraycopy(data, 0, result, header.length, data.length);
             return result;
 
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -1163,37 +1203,42 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
             final long totalstart = System.currentTimeMillis();
 
-            // Create an executor that executes tasks in the main thread.
-            Executor mainExecutor = ContextCompat.getMainExecutor(getApplicationContext());
-
-            // Create an executor that executes tasks in a background thread.
-            ScheduledExecutorService backgroundExecutor = Executors.newSingleThreadScheduledExecutor();
-
             try {
 
                 long readAudioFileStart = System.currentTimeMillis();
 
-
-                // full audio buffer
-                audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
-
-              /* Thread t1 = new Thread(new Runnable() {
+                ExecutorService executorService = Executors.newSingleThreadExecutor();
+                executorService.submit(new Runnable() {
                     @Override
                     public void run() {
-                        //function one or whatever
-                        try {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                // full audio buffer
+                                try {
+                                    audioFeatureValues = jLibrosa.loadAndRead(copyWavFileToCache(wavFilename), SAMPLE_RATE, DEFAULT_AUDIO_DURATION);
+                                } catch (IOException | WavFileException | FileFormatNotSupportedException e) {
+                                    e.printStackTrace();
+                                }
 
-                             } catch (IOException | WavFileException | FileFormatNotSupportedException e) {
-                            e.printStackTrace();
-                        }
+
+                            }
+                        });
                     }
                 });
-               t1.start();*/
+
 
 
                 long readAudioFileEnd = System.currentTimeMillis();
                 Log.d("time", "The process was running: full audio buffer:- " + ((double) (readAudioFileEnd - readAudioFileStart) / 1000.0d) + "sec");
                 audioRead.add((double) (readAudioFileEnd - readAudioFileStart) / 1000.0d);
+
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        resultTextview.append("The process was running: full audio buffer:- " + ((double) (readAudioFileEnd - readAudioFileStart) / 1000.0d) + "sec");
+                    }
+                });
 
                 // audio buffer of size 128
                 chunkData = ArrayChunk(audioFeatureValues, 128);
@@ -1225,6 +1270,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     long blockShiftEnd = System.currentTimeMillis();
                     Log.d("time", "The process was running: Block shifting:- " + ((double) (blockShiftEnd - blockShiftStart) / 1000.0d) + "sec");
                     blockShiftTime.add((double) (blockShiftEnd - blockShiftStart) / 1000.0d);
+
 
                     long fftStart = System.currentTimeMillis();
 
@@ -1303,32 +1349,32 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                     model2time.add((double) (model2end - model2start) / 1000.0d);
                 }
 
-                total = 0;
-                avg = 0;
+                total = 0.0;
+                avg = 0.0;
                 calculateTime(pre1, "pre1");
-                total = 0;
-                avg = 0;
+                total = 0.0;
+                avg = 0.0;
                 calculateTime(model1time, "model1time");
-                total = 0;
-                avg = 0;
+                total = 0.0;
+                avg = 0.0;
                 calculateTime(pre2, "pre2");
-                total = 0;
-                avg = 0;
+                total = 0.0;
+                avg = 0.0;
                 calculateTime(model2time, "model2time");
-                total = 0;
-                avg = 0;
+                total = 0.0;
+                avg = 0.0;
                 calculateTime(audioRead, "audioRead");
-                total = 0;
-                avg = 0;
+                total = 0.0;
+                avg = 0.0;
                 calculateTime(blockShiftTime, "blockShiftTime");
-                total = 0;
-                avg = 0;
+                total = 0.0;
+                avg = 0.0;
                 calculateTime(fft, "fft");
-                total = 0;
-                avg = 0;
+                total = 0.0;
+                avg = 0.0;
                 calculateTime(absEStTime, "absEStTime");
-                total = 0;
-                avg = 0;
+                //total = 0.0;
+                //avg = 0.0;
 
 
                 final long audioProcess = System.currentTimeMillis();
@@ -1339,6 +1385,12 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
                 final long audioProcessEnd = System.currentTimeMillis();
                 Log.d("total", "The process was running: Clean Audio File creation- " + ((double) (audioProcessEnd - audioProcess) / 1000.0d) + "sec");
 
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        resultTextview.append("The process was running: Clean Audio File creation- " + ((double) (audioProcessEnd - audioProcess) / 1000.0d) + "sec\n");
+                    }
+                });
 
                 //Log.d("dd", "success" + outputBuffer);
             } catch (Exception e) {
@@ -1347,9 +1399,9 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
 
             final long totalend = System.currentTimeMillis();
             Log.d("time", "The program was running: Total :" + ((double) (totalend - totalstart) / 1000.0d) + "sec \n ***************************************************");
-            runOnUiThread(() -> {
-                resultTextview.append("The program was running: Total :" + ((double) (totalend - totalstart) / 1000.0d) + "sec \n ***********************************************\n");
-            });
+
+            stringBuilder.append("The program was running: Total :" + ((double) (totalend - totalstart) / 1000.0d) + "sec \n***********************************************\n");
+
 
 
             return null;
@@ -1366,20 +1418,22 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         protected void onPostExecute(Void unused) {
             super.onPostExecute(unused);
             progressBar.setVisibility(View.GONE);
+            resultTextview.setText(stringBuilder.toString());
             Toast.makeText(getApplicationContext(), "Completed", Toast.LENGTH_SHORT).show();
         }
     }
 
     private void calculateTime(ArrayList<Double> arrayList, String tag) {
-        runOnUiThread(() -> {
+
             for (int i = 0; i < arrayList.size(); i++) {
                 total += arrayList.get(i);
             }
             avg = total / arrayList.size();
-            Log.d("total", "The total is of " + tag + ":: " + String.format("%.6f", total) + " sec");
-            //Log.d("time","The Average IS of "+ tag +" "+String.format("%.6f", avg)+" sec");
-            resultTextview.append("The total is of " + tag + ":: " + String.format("%.6f", total) + " sec \n");
-        });
+            Log.d("total", "The total is of " + tag + ":: " + String.format("%.3f", total) + " sec");
+            Log.d("time","The Average IS of "+ tag +" "+String.format("%.6f", avg)+" sec");
+
+            stringBuilder.append("The total is of " + tag + ":: " + String.format("%.3f", total) + " sec \n");
+
 
     }
 }

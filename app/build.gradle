@@ -46,10 +46,13 @@ dependencies {
     testImplementation 'junit:junit:4.+'
     androidTestImplementation 'androidx.test.ext:junit:1.1.3'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.4.0'
+
     // The CONFORMER model is only compatible with TFLite 2.4. Need to re-convert the model if
     // we want to use another version.
     implementation 'org.tensorflow:tensorflow-lite:2.8.0'
     implementation 'org.tensorflow:tensorflow-lite-select-tf-ops:2.4.0'
+    implementation 'org.tensorflow:tensorflow-lite-gpu:2.3.0'
+
     implementation 'com.google.guava:guava:28.2-android'
     implementation 'androidx.multidex:multidex:2.0.1'
     implementation ('com.github.wendykierp:JTransforms:3.1') {
