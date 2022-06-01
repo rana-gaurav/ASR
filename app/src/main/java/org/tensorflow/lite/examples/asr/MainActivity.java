@@ -892,7 +892,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
         /*CompatibilityList compatList= new CompatibilityList();
         if(compatList.isDelegateSupportedOnThisDevice()){
             GpuDelegate.Options delegateOptions= compatList.getBestOptionsForThisDevice();
-            GpuDelegate gpuDelegate=new GpuDelegate();
+            GpuDelegate gpuDelegate=new GpuDelegate(delegateOptions);
             tfLiteOptions1.addDelegate(gpuDelegate);
         }else {
             // if the GPU is not supported, it will run on 4 threads
@@ -916,7 +916,7 @@ public class MainActivity extends AppCompatActivity implements AdapterView.OnIte
        /* CompatibilityList compatList= new CompatibilityList();
         if(compatList.isDelegateSupportedOnThisDevice()){
             //GpuDelegate.Options delegateOptions= compatList.getBestOptionsForThisDevice();
-            GpuDelegate gpuDelegate=new GpuDelegate();
+            GpuDelegate gpuDelegate=new GpuDelegate(delegateOptions);
             tfLiteOptions2.addDelegate(gpuDelegate);
             Log.d("XXX","Using GPU");
         }else {
