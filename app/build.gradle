@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    compileSdk 30
+    compileSdk 31
 
     defaultConfig {
         applicationId "org.tensorflow.lite.examples.asr"
@@ -49,7 +49,7 @@ dependencies {
 
     // The CONFORMER model is only compatible with TFLite 2.4. Need to re-convert the model if
     // we want to use another version.
-    implementation 'org.tensorflow:tensorflow-lite:2.9.0'
+    implementation 'org.tensorflow:tensorflow-lite:2.3.0'
     implementation 'org.tensorflow:tensorflow-lite-select-tf-ops:2.4.0'
     implementation 'org.tensorflow:tensorflow-lite-gpu:2.9.0'
 
